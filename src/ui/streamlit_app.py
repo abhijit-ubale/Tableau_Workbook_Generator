@@ -23,7 +23,21 @@ init_default_logging()
 logger = get_logger(__name__)
 
 class StreamlitApp:
-    """Main Streamlit application class"""
+    """
+    Main Streamlit web application.
+    
+    Provides the complete UI for data upload, requirements specification,
+    AI analysis, and Tableau dashboard generation.
+    
+    Attributes
+    ----------
+    config : Config
+        Application configuration loaded from config.yaml
+    data_processor : DataProcessor
+        Data loading and validation processor
+    workflow : DashboardGenerationWorkflow
+        Langgraph workflow orchestrator
+    """
     
     def __init__(self):
         self.config = None
@@ -32,7 +46,12 @@ class StreamlitApp:
         self.setup_config()
         
     def setup_config(self):
-        """Initialize configuration and components"""
+        """
+        Initialize configuration and components.
+        
+        Loads config from YAML, initializes DataProcessor and Workflow.
+        Logs errors to both Streamlit UI and logger.
+        """
         try:
             self.config = get_config()
             self.data_processor = DataProcessor(self.config)
@@ -43,7 +62,11 @@ class StreamlitApp:
             logger.error(f"App initialization failed: {e}")
     
     def run(self):
-        """Run the Streamlit application"""
+        """
+        Run the Streamlit application.
+        
+        Configures page metadata and renders header, sidebar, and main content.
+        """
         # Configure Streamlit page
         st.set_page_config(
             page_title=self.config.streamlit.page_config.get("page_title", "Tableau Dashboard Generator"),
@@ -58,7 +81,12 @@ class StreamlitApp:
         self.render_main_content()
         
     def render_header(self):
-        """Render application header"""
+        """
+        Render application header with title and status.
+        
+        Displays app title, description, and expandable status section
+        showing Azure OpenAI connectivity, version, and debug mode.
+        """
         st.title("🚀 Tableau Dashboard Generator")
         st.markdown("""
         **AI-Powered Automatic Dashboard Creation** • Upload your data and let AI create compelling Tableau dashboards
@@ -79,7 +107,13 @@ class StreamlitApp:
                     st.metric("Debug Mode", "On" if self.config.application.debug else "Off")
     
     def render_sidebar(self):
-        """Render sidebar with settings and options"""
+        """
+        Render sidebar with configuration options.
+        
+        Shows file upload settings, output format selection, sample data option,
+        and advanced options (color scheme, max visualizations).
+        Stores selections in session_state.
+        """
         with st.sidebar:
             st.header("⚙️ Settings")
             
@@ -127,7 +161,12 @@ class StreamlitApp:
                 st.session_state.max_visualizations = max_visualizations
     
     def render_main_content(self):
-        """Render main content area"""
+        """
+        Render main content with four workflow tabs.
+        
+        Tabs: Data Upload → Requirements → AI Analysis → Generate Dashboard.
+        Initializes session state for workflow tracking.
+        """
         
         # Initialize session state
         if 'workflow_status' not in st.session_state:
@@ -160,7 +199,13 @@ class StreamlitApp:
             self.render_generation_tab()
     
     def render_data_upload_tab(self):
-        """Render data upload interface"""
+        """
+        Render data upload interface.
+        
+        Handles file upload, validation, preprocessing, and schema creation.
+        Displays data preview, validation results, and data summary metrics.
+        Stores processed data and schema in session_state.
+        """
         st.header("📤 Upload Your Data")
         
         # File uploader
@@ -244,7 +289,16 @@ class StreamlitApp:
                     st.metric("File", st.session_state.uploaded_data['original_filename'])
     
     def display_data_preview(self, df: pd.DataFrame, validation_result):
-        """Display data preview and validation results"""
+        """
+        Display data preview and validation results.
+        
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Processed dataframe to preview (first 10 rows)
+        validation_result : ValidationResult
+            Validation result with errors, warnings, suggestions
+        """
         
         # Data preview
         st.subheader("🔍 Data Preview")
@@ -291,7 +345,12 @@ class StreamlitApp:
             st.dataframe(pd.DataFrame(col_data), use_container_width=True)
     
     def render_requirements_tab(self):
-        """Render requirements specification interface"""
+        """
+        Render requirements specification interface.
+        
+        Captures business goals, target audience, and dashboard preferences.
+        Stores requirements in session_state for workflow use.
+        """
         st.header("🎯 Specify Requirements")
         
         if not st.session_state.uploaded_data:
@@ -417,7 +476,12 @@ class StreamlitApp:
                 del st.session_state.requirements
     
     def render_analysis_tab(self):
-        """Render AI analysis interface"""
+        """
+        Render AI analysis interface.
+        
+        Requires data upload and requirements specification.
+        Triggers AI analysis via workflow.analyzer and displays results.
+        """
         st.header("🤖 AI Analysis")
         
         if not st.session_state.uploaded_data:
@@ -437,7 +501,13 @@ class StreamlitApp:
             self.display_analysis_results()
     
     def run_ai_analysis(self):
-        """Execute AI analysis"""
+        """
+        Execute AI analysis asynchronously.
+        
+        Runs workflow.analyzer.analyze_dataset with dataset schema,
+        business goals, and user preferences. Displays progress.
+        Stores result in session_state.ai_analysis.
+        """
         try:
             with st.spinner("🤖 AI is analyzing your data and requirements..."):
                 # Create progress bar
@@ -488,7 +558,12 @@ class StreamlitApp:
             logger.error(f"AI analysis failed: {e}")
     
     def display_analysis_results(self):
-        """Display AI analysis results"""
+        """
+        Display AI analysis results in expandable sections.
+        
+        Shows dataset insights, recommended KPIs, visualizations,
+        design recommendations, and performance considerations.
+        """
         analysis = st.session_state.ai_analysis
         
         st.subheader("📊 AI Analysis Results")
@@ -561,7 +636,12 @@ class StreamlitApp:
                     st.write(f"• {consideration}")
     
     def render_generation_tab(self):
-        """Render dashboard generation interface"""
+        """
+        Render dashboard generation interface.
+        
+        Validates data upload, requirements, and analysis.
+        Shows generation progress and result download button.
+        """
         st.header("📊 Generate Dashboard")
         
         if not st.session_state.uploaded_data:
@@ -603,7 +683,13 @@ class StreamlitApp:
             self.display_generation_result()
     
     def start_dashboard_generation(self):
-        """Start the dashboard generation workflow"""
+        """
+        Start the complete dashboard generation workflow.
+        
+        Runs workflow.run_workflow asynchronously with dataset schema,
+        business goals, audience, and preferences. Stores result in
+        session_state.generation_result.
+        """
         try:
             st.session_state.workflow_status = 'generating'
             
@@ -642,7 +728,12 @@ class StreamlitApp:
             st.session_state.workflow_status = 'ready'
     
     def display_generation_result(self):
-        """Display generation results and download options"""
+        """
+        Display generation results and download options.
+        
+        Shows execution metrics, workbook details, download button,
+        and any warnings or errors from generation.
+        """
         result = st.session_state.generation_result
         
         if result['success']:
@@ -713,7 +804,12 @@ class StreamlitApp:
 
 # Create and run the app
 def main():
-    """Main entry point for the Streamlit app"""
+    """
+    Main entry point for the Streamlit app.
+    
+    Creates StreamlitApp instance and runs it.
+    Catches initialization errors and displays to UI.
+    """
     try:
         app = StreamlitApp()
         app.run()
