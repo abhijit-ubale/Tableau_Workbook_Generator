@@ -136,28 +136,28 @@ graph TB
 #### Conditional Routing Logic
 
 ```mermaid
-graph LR
-    VI["validate_input_node"]
+graph TB
+    VI["validate_input_node<br/>Input Received"]
     
-    CR1{Schema Valid?}
-    CR2{Min Data<br/>Requirements?}
-    CR3{File Size<br/>OK?}
+    CR1{"Schema Valid?"}
+    CR2{"Min Data<br/>Requirements?"}
+    CR3{"File Size<br/>OK?"}
     
-    AD["analyze_data_node"]
-    HE["handle_error_node"]
+    AD["analyze_data_node<br/>Proceed to Analysis"]
+    HE["handle_error_node<br/>Error Handling"]
     
     VI --> CR1
-    CR1 -->|No| HE
-    CR1 -->|Yes| CR2
-    CR2 -->|No| HE
-    CR2 -->|Yes| CR3
-    CR3 -->|No| HE
-    CR3 -->|Yes| AD
+    CR1 -->|❌ No| HE
+    CR1 -->|✓ Yes| CR2
+    CR2 -->|❌ No| HE
+    CR2 -->|✓ Yes| CR3
+    CR3 -->|❌ No| HE
+    CR3 -->|✓ Yes| AD
     
     style VI fill:#2E7D32,stroke:#1B5E20,stroke-width:2px,color:#fff
-    style CR1 fill:#F57F17,stroke:#F57F17,stroke-width:2px,color:#fff
-    style CR2 fill:#F57F17,stroke:#F57F17,stroke-width:2px,color:#fff
-    style CR3 fill:#F57F17,stroke:#F57F17,stroke-width:2px,color:#fff
+    style CR1 fill:#F57F17,stroke:#E65100,stroke-width:2px,color:#fff
+    style CR2 fill:#F57F17,stroke:#E65100,stroke-width:2px,color:#fff
+    style CR3 fill:#F57F17,stroke:#E65100,stroke-width:2px,color:#fff
     style AD fill:#1976D2,stroke:#1565C0,stroke-width:2px,color:#fff
     style HE fill:#C62828,stroke:#880E4F,stroke-width:2px,color:#fff
 ```
@@ -165,7 +165,9 @@ graph LR
 **Conditional Logic Rationale:**
 - **Multi-condition gates** ensure all validations pass before proceeding
 - **Fail-fast approach** prevents wasted processing on bad data
-- **Clear branching** enables debugging and state inspection
+- **Clear vertical branching** enables debugging and state inspection
+- **Visual flow**: Green (start) → Amber (decisions) → Blue (success) or Red (error)
+- **Sequential validation**: Each gate must pass to proceed downward
 
 #### State Management & Checkpoint Recovery
 
@@ -325,17 +327,6 @@ sequenceDiagram
   - 🟤 **Charcoal (#263238)**: User & Error Context
 - **Colored rectangular backgrounds** provide visual context blocks for each stage
 - **Clear participant identification** with emoji + descriptive labels
-
-**Timeline Reasoning:**
-- **Sequential node execution** ensures dependencies are met
-- **State accumulation** builds complete context for each step
-- **Early error detection** prevents downstream failures
-- **User feedback** available at each stage via progress tracking
-- **Color-coded stages** visually distinguish workflow phases:
-  - 🟢 **Green (#2E7D32)**: Validation & Safety checks
-  - 🔵 **Blue (#1976D2)**: Intelligence & Analysis
-  - 🔴 **Red (#D32F2F)**: Generation & Processing
-  - 🟠 **Orange (#F57C00)**: Finalization & Delivery
 
 ---
 
