@@ -31,7 +31,313 @@ Transform your data into compelling Tableau dashboards with the power of AI. Thi
                        └──────────────────┘
 ```
 
-## 🚀 Quick Start
+### 📊 Langgraph Workflow Architecture
+
+**Why Langgraph?** Langgraph provides robust state management, conditional routing, and checkpoint persistence—essential for multi-step dashboard generation workflows where failures must be recoverable and state must be maintained across complex orchestration.
+
+#### Dashboard Generation Workflow State Flow
+
+```mermaid
+stateDiagram-v2
+    [*] --> ValidateInput
+    
+    ValidateInput --> CheckValidation
+    CheckValidation --> HandleError: No
+    CheckValidation --> AnalyzeData: Yes
+    
+    AnalyzeData --> CheckAnalysis
+    CheckAnalysis --> HandleError: No
+    CheckAnalysis --> GenerateWorkbook: Yes
+    
+    GenerateWorkbook --> CheckGeneration
+    CheckGeneration --> HandleError: No
+    CheckGeneration --> FinalizeResult: Yes
+    
+    FinalizeResult --> [*]
+    HandleError --> [*]
+    
+    style ValidateInput fill:#2E7D32,stroke:#1B5E20,stroke-width:2px,color:#fff
+    style CheckValidation fill:#F57F17,stroke:#F57F17,stroke-width:2px,color:#fff
+    style AnalyzeData fill:#1976D2,stroke:#1565C0,stroke-width:2px,color:#fff
+    style CheckAnalysis fill:#F57F17,stroke:#F57F17,stroke-width:2px,color:#fff
+    style GenerateWorkbook fill:#D32F2F,stroke:#B71C1C,stroke-width:2px,color:#fff
+    style CheckGeneration fill:#F57F17,stroke:#F57F17,stroke-width:2px,color:#fff
+    style FinalizeResult fill:#F57C00,stroke:#E65100,stroke-width:2px,color:#fff
+    style HandleError fill:#C62828,stroke:#880E4F,stroke-width:2px,color:#fff
+```
+
+**Workflow Rationale:**
+- **Linear primary path** ensures data flows through validation → analysis → generation → finalization
+- **Error handling at each stage** prevents cascading failures
+- **Checkpoint persistence** allows recovery from failures mid-workflow
+
+#### Detailed Langgraph Node Architecture
+
+```mermaid
+graph TB
+    subgraph "WorkflowState Management"
+        WS["WorkflowState<br/>├── dataset_schema<br/>├── business_goals<br/>├── target_audience<br/>├── ai_analysis<br/>├── generation_request<br/>├── generated_result<br/>├── errors<br/>└── warnings"]
+    end
+    
+    subgraph "Node 1: Input Validation"
+        N1["validate_input_node<br/>────────────<br/>✓ File format check<br/>✓ Data structure<br/>✓ Column validation<br/>✓ Size limits"]
+    end
+    
+    subgraph "Node 2: AI Analysis"
+        N2["analyze_data_node<br/>────────────<br/>✓ Schema inference<br/>✓ Quality assessment<br/>✓ KPI identification<br/>✓ Viz recommendations"]
+    end
+    
+    subgraph "Node 3: Workbook Generation"
+        N3["generate_workbook_node<br/>────────────<br/>✓ XML creation<br/>✓ Data embedding<br/>✓ Calculations<br/>✓ Visualizations"]
+    end
+    
+    subgraph "Node 4: Finalization"
+        N4["finalize_result_node<br/>────────────<br/>✓ Package TWBX<br/>✓ Validation<br/>✓ Logging<br/>✓ Cleanup"]
+    end
+    
+    subgraph "Error Handler"
+        N5["handle_error_node<br/>────────────<br/>✓ Log errors<br/>✓ Collect warnings<br/>✓ Return status"]
+    end
+    
+    subgraph "External Services"
+        ES1["Azure OpenAI<br/>LLM Service"]
+        ES2["Tableau Engine<br/>XML Generator"]
+    end
+    
+    WS -->|State In| N1
+    N1 -->|State Out| N2
+    N2 -->|Calls| ES1
+    N2 -->|State Out| N3
+    N3 -->|Calls| ES2
+    N3 -->|State Out| N4
+    N4 -->|Returns| WS
+    
+    N1 -->|On Error| N5
+    N2 -->|On Error| N5
+    N3 -->|On Error| N5
+    N5 -->|Returns| WS
+    
+    style WS fill:#263238,stroke:#1C1C1C,stroke-width:2px,color:#fff
+    style N1 fill:#2E7D32,stroke:#1B5E20,stroke-width:2px,color:#fff
+    style N2 fill:#1976D2,stroke:#1565C0,stroke-width:2px,color:#fff
+    style N3 fill:#D32F2F,stroke:#B71C1C,stroke-width:2px,color:#fff
+    style N4 fill:#F57C00,stroke:#E65100,stroke-width:2px,color:#fff
+    style N5 fill:#C62828,stroke:#880E4F,stroke-width:2px,color:#fff
+    style ES1 fill:#455A64,stroke:#37474F,stroke-width:2px,color:#fff
+    style ES2 fill:#455A64,stroke:#37474F,stroke-width:2px,color:#fff
+```
+
+**Node Architecture Reasoning:**
+- **Separation of Concerns**: Each node handles a single responsibility
+- **State Threading**: WorkflowState flows through all nodes, accumulating results
+- **External Service Isolation**: AI and Tableau engines called within nodes, not at node level
+- **Error Isolation**: Dedicated error handler prevents workflow corruption
+
+#### Conditional Routing Logic
+
+```mermaid
+graph LR
+    VI["validate_input_node"]
+    
+    CR1{Schema Valid?}
+    CR2{Min Data<br/>Requirements?}
+    CR3{File Size<br/>OK?}
+    
+    AD["analyze_data_node"]
+    HE["handle_error_node"]
+    
+    VI --> CR1
+    CR1 -->|No| HE
+    CR1 -->|Yes| CR2
+    CR2 -->|No| HE
+    CR2 -->|Yes| CR3
+    CR3 -->|No| HE
+    CR3 -->|Yes| AD
+    
+    style VI fill:#2E7D32,stroke:#1B5E20,stroke-width:2px,color:#fff
+    style CR1 fill:#F57F17,stroke:#F57F17,stroke-width:2px,color:#fff
+    style CR2 fill:#F57F17,stroke:#F57F17,stroke-width:2px,color:#fff
+    style CR3 fill:#F57F17,stroke:#F57F17,stroke-width:2px,color:#fff
+    style AD fill:#1976D2,stroke:#1565C0,stroke-width:2px,color:#fff
+    style HE fill:#C62828,stroke:#880E4F,stroke-width:2px,color:#fff
+```
+
+**Conditional Logic Rationale:**
+- **Multi-condition gates** ensure all validations pass before proceeding
+- **Fail-fast approach** prevents wasted processing on bad data
+- **Clear branching** enables debugging and state inspection
+
+#### State Management & Checkpoint Recovery
+
+```mermaid
+graph TB
+    subgraph "Checkpointing Strategy"
+        CP["MemorySaver Checkpoint<br/>└── Preserves state at each node"]
+    end
+    
+    subgraph "Failure Scenario"
+        F1["Failure at Node 3<br/>generate_workbook_node"]
+    end
+    
+    subgraph "Recovery Path"
+        R1["Resume from Checkpoint<br/>├── Restore state from Node 2<br/>├── Skip nodes 1-2<br/>└── Retry Node 3 with new params"]
+    end
+    
+    CP --> F1
+    F1 --> R1
+    
+    style CP fill:#263238,stroke:#1C1C1C,stroke-width:2px,color:#fff
+    style F1 fill:#C62828,stroke:#880E4F,stroke-width:2px,color:#fff
+    style R1 fill:#2E7D32,stroke:#1B5E20,stroke-width:2px,color:#fff
+```
+
+**Checkpoint Reasoning:**
+- **Fault Tolerance**: System can recover from transient failures (API timeouts, etc.)
+- **Resource Efficiency**: Avoids re-running successful nodes after failures
+- **Production Reliability**: Essential for long-running workflows
+
+#### Integration with Streamlit & External Systems
+
+```mermaid
+graph TB
+    subgraph "Streamlit UI Layer"
+        SUI["StreamlitApp<br/>├── File Upload<br/>├── Config Input<br/>├── Progress Display<br/>└── Download"]
+    end
+    
+    subgraph "Langgraph Orchestration"
+        WF["DashboardGenerationWorkflow<br/>├── StateGraph<br/>├── Node Execution<br/>├── Conditional Routing<br/>└── Error Handling"]
+    end
+    
+    subgraph "Processing Layer"
+        AI["AI Engine<br/>Azure OpenAI<br/>Meta-Prompting"]
+        TB["Tableau Engine<br/>XML Generation<br/>Calculations"]
+    end
+    
+    subgraph "Data Management"
+        DM["Data Processor<br/>├── Upload Storage<br/>├── Temp Files<br/>└── Output Storage"]
+    end
+    
+    SUI -->|Triggers Workflow| WF
+    WF -->|Calls AI Services| AI
+    WF -->|Calls Workbook Gen| TB
+    WF -->|Uses File Ops| DM
+    TB -->|Returns TWBX| SUI
+    AI -->|Returns Analysis| WF
+    
+    style SUI fill:#1565C0,stroke:#0D47A1,stroke-width:2px,color:#fff
+    style WF fill:#512DA8,stroke:#311B92,stroke-width:2px,color:#fff
+    style AI fill:#D32F2F,stroke:#B71C1C,stroke-width:2px,color:#fff
+    style TB fill:#00796B,stroke:#004D40,stroke-width:2px,color:#fff
+    style DM fill:#F57C00,stroke:#E65100,stroke-width:2px,color:#fff
+```
+
+**Integration Reasoning:**
+- **Decoupled Services**: Streamlit, AI, and Tableau engines are independently testable
+- **Single Orchestrator**: Langgraph manages all coordination, reducing coupling
+- **Clear Data Flow**: Input → Processing → Output with explicit state transitions
+
+#### Event Flow Timeline
+
+```mermaid
+sequenceDiagram
+    actor User as 👤 User
+    participant Streamlit as 🌐 Streamlit UI
+    participant Langgraph as 🔄 Langgraph Core
+    participant Validator as ✓ Validator Node
+    participant AIEngine as 🤖 AI Engine
+    participant TableauEngine as 📊 Tableau Engine
+    participant Storage as 💾 Storage Node
+    
+    rect rgb(38, 50, 56)
+        Note over User: User initiates<br/>dashboard generation
+    end
+    
+    User->>Streamlit: Upload CSV + Config
+    activate Streamlit
+    
+    rect rgb(21, 101, 192)
+        Note over Streamlit,Langgraph: Orchestration begins
+    end
+    
+    Streamlit->>Langgraph: invoke(workflow, state)
+    activate Langgraph
+    
+    rect rgb(46, 125, 50)
+        Note over Langgraph,Validator: Stage 1: Validation
+    end
+    
+    Langgraph->>Validator: execute validate_input_node
+    activate Validator
+    Validator-->>Langgraph: ✓ State + metadata
+    deactivate Validator
+    
+    rect rgb(25, 118, 210)
+        Note over Langgraph,AIEngine: Stage 2: AI Analysis
+    end
+    
+    Langgraph->>AIEngine: execute analyze_data_node
+    activate AIEngine
+    AIEngine->>AIEngine: Call Azure OpenAI
+    AIEngine-->>Langgraph: ✓ State + analysis
+    deactivate AIEngine
+    
+    rect rgb(211, 47, 47)
+        Note over Langgraph,TableauEngine: Stage 3: Generation
+    end
+    
+    Langgraph->>TableauEngine: execute generate_workbook_node
+    activate TableauEngine
+    TableauEngine->>TableauEngine: Build XML + formulas
+    TableauEngine-->>Langgraph: ✓ State + workbook
+    deactivate TableauEngine
+    
+    rect rgb(245, 124, 0)
+        Note over Langgraph,Storage: Stage 4: Finalization
+    end
+    
+    Langgraph->>Storage: execute finalize_result_node
+    activate Storage
+    Storage->>Storage: Package TWBX
+    Storage-->>Langgraph: ✓ Final state
+    deactivate Storage
+    
+    Langgraph-->>Streamlit: Return completed state
+    deactivate Langgraph
+    
+    Streamlit-->>User: Download .twbx file
+    deactivate Streamlit
+    
+    rect rgb(198, 40, 40)
+        Note over Langgraph: ⚠️ Error Handling Active<br/>All failures trigger handle_error_node
+    end
+```
+
+**Timeline Reasoning:**
+- **Sequential node execution** ensures dependencies are met
+- **State accumulation** builds complete context for each step
+- **Early error detection** prevents downstream failures
+- **User feedback** available at each stage via progress tracking
+- **Color-coded stages** visually distinguish workflow phases:
+  - 🟢 **Green (#2E7D32)**: Validation & Safety checks
+  - 🔵 **Blue (#1976D2)**: Intelligence & Analysis
+  - 🔴 **Red (#D32F2F)**: Generation & Processing
+  - 🟠 **Orange (#F57C00)**: Finalization & Delivery
+  - 🟤 **Charcoal (#263238)**: User & Error Context
+- **Colored rectangular backgrounds** provide visual context blocks for each stage
+- **Clear participant identification** with emoji + descriptive labels
+
+**Timeline Reasoning:**
+- **Sequential node execution** ensures dependencies are met
+- **State accumulation** builds complete context for each step
+- **Early error detection** prevents downstream failures
+- **User feedback** available at each stage via progress tracking
+- **Color-coded stages** visually distinguish workflow phases:
+  - 🟢 **Green (#2E7D32)**: Validation & Safety checks
+  - 🔵 **Blue (#1976D2)**: Intelligence & Analysis
+  - 🔴 **Red (#D32F2F)**: Generation & Processing
+  - 🟠 **Orange (#F57C00)**: Finalization & Delivery
+
+---
 
 ### Prerequisites
 
