@@ -23,6 +23,7 @@ import sys
 import os
 from pathlib import Path
 
+
 # Add the src directory to the Python path
 src_path = Path(__file__).parent / "src"
 sys.path.insert(0, str(src_path))
@@ -88,10 +89,19 @@ def check_dependencies():
     ]
     
     missing_packages = []
-    
+    # Some pip package names differ from their import names (e.g. PyYAML -> yaml,
+    # python-dotenv -> dotenv). Provide a mapping to check the correct module.
+    import_name_map = {
+        'pyyaml': 'yaml',
+        'python-dotenv': 'dotenv',
+        'python_dotenv': 'dotenv',
+        'langchain-openai': 'langchain_openai',
+    }
+
     for package in required_packages:
+        import_name = import_name_map.get(package, package.replace('-', '_'))
         try:
-            __import__(package.replace('-', '_'))
+            __import__(import_name)
         except ImportError:
             missing_packages.append(package)
     

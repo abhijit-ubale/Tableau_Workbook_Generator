@@ -7,11 +7,20 @@ import os
 import yaml
 from typing import Dict, Any, Optional, List
 from pathlib import Path
-from dataclasses import dataclass
+from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
 
-@dataclass
-class AzureOpenAIConfig:
+class LLMConfig(BaseModel):
+    """Generic LLM configuration to support multiple providers."""
+    provider: str = "azure"
+    model_name: str = "gpt-4-turbo"
+    api_key: str = ""
+    endpoint: str = ""
+    deployment_name: str = ""
+    api_version: str = "2024-02-15-preview"
+    extra_kwargs: Dict[str, Any] = Field(default_factory=dict)
+
+class AzureOpenAIConfig(BaseModel):
     """Azure OpenAI configuration"""
     endpoint: str
     api_key: str
@@ -21,54 +30,63 @@ class AzureOpenAIConfig:
     temperature: float = 0.3
     max_tokens: int = 4000
     top_p: float = 0.9
+    
+    @field_validator('temperature')
+    @classmethod
+    def validate_temperature(cls, v):
+        if v < 0 or v > 2:
+            raise ValueError('temperature must be between 0 and 2')
+        return v
+    
+    @field_validator('max_tokens')
+    @classmethod
+    def validate_max_tokens(cls, v):
+        if v < 1:
+            raise ValueError('max_tokens must be positive')
+        return v
 
-@dataclass  
-class ApplicationConfig:
+class ApplicationConfig(BaseModel):
     """Application-level configuration"""
     name: str = "Tableau Dashboard Generator"
     version: str = "1.0.0"
     description: str = "AI-powered automatic Tableau dashboard generation"
     debug: bool = False
     log_level: str = "INFO"
+    llm_provider: str = "azure"
 
-@dataclass
-class FileStorageConfig:
+class FileStorageConfig(BaseModel):
     """File storage configuration"""
     upload_folder: str = "./data/uploads"
     output_folder: str = "./data/outputs"
     temp_folder: str = "./data/temp"
     max_file_size_mb: int = 100
 
-@dataclass
-class DashboardGenerationConfig:
+class DashboardGenerationConfig(BaseModel):
     """Dashboard generation configuration"""
     max_worksheets_per_workbook: int = 10
     max_dashboards_per_workbook: int = 5
     default_width: int = 1200
     default_height: int = 800
-    visualization_types: Dict[str, List[str]] = None
-    color_schemes: Dict[str, Any] = None
+    visualization_types: Dict[str, List[str]] = Field(default_factory=dict)
+    color_schemes: Dict[str, Any] = Field(default_factory=dict)
 
-@dataclass
-class DataProcessingConfig:
+class DataProcessingConfig(BaseModel):
     """Data processing configuration"""
     max_file_size_mb: int = 100
-    supported_formats: List[str] = None
+    supported_formats: List[str] = Field(default_factory=lambda: ["csv", "xlsx", "json", "parquet"])
     auto_detect_types: bool = True
     sample_rows_for_analysis: int = 1000
     null_threshold: float = 0.3
 
-@dataclass
-class MetaPromptingConfig:
+class MetaPromptingConfig(BaseModel):
     """Meta-prompting configuration"""
-    system_prompts: Dict[str, str] = None
+    system_prompts: Dict[str, str] = Field(default_factory=dict)
 
-@dataclass
-class StreamlitConfig:
+class StreamlitConfig(BaseModel):
     """Streamlit configuration"""
     server_port: int = 8501
     server_address: str = "localhost"
-    page_config: Dict[str, Any] = None
+    page_config: Dict[str, Any] = Field(default_factory=dict)
 
 class Config:
     """
@@ -95,6 +113,14 @@ class Config:
         # Initialize configuration sections
         self.azure_openai = self._init_azure_openai_config()
         self.application = self._init_application_config()
+        # Generic LLM configuration (may detect GEMINI_API_KEY)
+        self.llm = self._init_llm_config()
+        # Mirror chosen provider into application.llm_provider for compatibility
+        try:
+            self.application.llm_provider = self.llm.provider
+        except Exception:
+            pass
+
         self.file_storage = self._init_file_storage_config()
         self.dashboard_generation = self._init_dashboard_generation_config()
         self.data_processing = self._init_data_processing_config()
@@ -198,7 +224,8 @@ class Config:
             version=os.getenv("APP_VERSION", config.get("version", "1.0.0")),
             description=config.get("description", "AI-powered automatic Tableau dashboard generation"),
             debug=os.getenv("DEBUG", "false").lower() == "true",
-            log_level=os.getenv("LOG_LEVEL", "INFO")
+            log_level=os.getenv("LOG_LEVEL", "INFO"),
+            llm_provider=os.getenv("LLM_PROVIDER", config.get("llm_provider", "azure"))
         )
     
     def _init_file_storage_config(self) -> FileStorageConfig:
@@ -242,6 +269,53 @@ class Config:
         return MetaPromptingConfig(
             system_prompts=config.get("system_prompts", {})
         )
+
+    def _init_llm_config(self) -> LLMConfig:
+        """Initialize a generic LLM configuration from env/config.yaml."""
+        config = self.config_data.get("llm", {})
+
+        # If the user placed a GEMINI_API_KEY and didn't explicitly set LLM_PROVIDER,
+        # prefer Gemini (Google Gemini) as the provider.
+        env_provider = os.getenv("LLM_PROVIDER")
+        # Accept common Gemeni env var names (user may have used `gem_key`)
+        gemini_env = os.getenv("GEMINI_API_KEY") or os.getenv("GEM_KEY") or os.getenv("gem_key")
+
+        provider = (
+            env_provider
+            or config.get("provider")
+            or ("gemini" if gemini_env else "azure")
+        )
+
+        model_name = os.getenv(
+            "LLM_MODEL_NAME",
+            config.get("model_name", os.getenv("AZURE_OPENAI_MODEL_NAME", "gpt-4-turbo")),
+        )
+
+        # Prefer specific env vars if present
+        api_key = (
+            os.getenv("LLM_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+            or os.getenv("AZURE_OPENAI_API_KEY")
+            or os.getenv("ANTHROPIC_API_KEY")
+            or gemini_env
+            or os.getenv("GROK_API_KEY")
+            or config.get("api_key", "")
+        )
+
+        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", config.get("endpoint", ""))
+        deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", config.get("deployment_name", ""))
+        api_version = os.getenv("AZURE_OPENAI_API_VERSION", config.get("api_version", "2024-02-15-preview"))
+        extra_kwargs = config.get("extra_kwargs", {})
+
+        return LLMConfig(
+            provider=provider,
+            model_name=model_name,
+            api_key=api_key,
+            endpoint=endpoint,
+            deployment_name=deployment_name,
+            api_version=api_version,
+            extra_kwargs=extra_kwargs,
+        )
     
     def _init_streamlit_config(self) -> StreamlitConfig:
         """Initialize Streamlit configuration"""
@@ -257,13 +331,14 @@ class Config:
         """Validate configuration settings"""
         errors = []
         
-        # Validate Azure OpenAI configuration
-        if not self.azure_openai.endpoint:
-            errors.append("Azure OpenAI endpoint is required")
-        if not self.azure_openai.api_key:
-            errors.append("Azure OpenAI API key is required")
-        if not self.azure_openai.deployment_name:
-            errors.append("Azure OpenAI deployment name is required")
+        # Validate Azure OpenAI configuration only when Azure provider selected
+        if self.application.llm_provider and self.application.llm_provider.lower() in ("azure", "azureopenai", "azure_openai"):
+            if not self.azure_openai.endpoint:
+                errors.append("Azure OpenAI endpoint is required for Azure provider")
+            if not self.azure_openai.api_key:
+                errors.append("Azure OpenAI API key is required for Azure provider")
+            if not self.azure_openai.deployment_name:
+                errors.append("Azure OpenAI deployment name is required for Azure provider")
         
         # Validate file paths
         for folder in [self.file_storage.upload_folder, self.file_storage.output_folder, self.file_storage.temp_folder]:
@@ -273,11 +348,19 @@ class Config:
                 errors.append(f"Cannot create directory {folder}: {e}")
         
         # Validate numeric ranges
-        if self.azure_openai.temperature < 0 or self.azure_openai.temperature > 2:
-            errors.append("Azure OpenAI temperature must be between 0 and 2")
-        
-        if self.azure_openai.max_tokens < 1:
-            errors.append("Azure OpenAI max_tokens must be positive")
+        # Validate token/temperature ranges if available
+        try:
+            temp = float(self.azure_openai.temperature)
+            if temp < 0 or temp > 2:
+                errors.append("Azure OpenAI temperature must be between 0 and 2")
+        except Exception:
+            pass
+
+        try:
+            if int(self.azure_openai.max_tokens) < 1:
+                errors.append("Azure OpenAI max_tokens must be positive")
+        except Exception:
+            pass
         
         if errors:
             raise ValueError(f"Configuration validation failed:\n" + "\n".join(f"- {error}" for error in errors))
@@ -285,36 +368,17 @@ class Config:
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary"""
         return {
-            "azure_openai": {
-                "endpoint": self.azure_openai.endpoint,
-                "api_version": self.azure_openai.api_version,
-                "deployment_name": self.azure_openai.deployment_name,
-                "model_name": self.azure_openai.model_name,
-                "temperature": self.azure_openai.temperature,
-                "max_tokens": self.azure_openai.max_tokens,
-                "top_p": self.azure_openai.top_p
+            "azure_openai": self.azure_openai.model_dump(),
+            "application": self.application.model_dump(),
+            "llm": {
+                **self.llm.model_dump(),
+                "api_key": bool(self.llm.api_key)  # Don't expose actual key
             },
-            "application": {
-                "name": self.application.name,
-                "version": self.application.version,
-                "description": self.application.description,
-                "debug": self.application.debug,
-                "log_level": self.application.log_level
-            },
-            "file_storage": {
-                "upload_folder": self.file_storage.upload_folder,
-                "output_folder": self.file_storage.output_folder,
-                "temp_folder": self.file_storage.temp_folder,
-                "max_file_size_mb": self.file_storage.max_file_size_mb
-            },
-            "dashboard_generation": {
-                "max_worksheets_per_workbook": self.dashboard_generation.max_worksheets_per_workbook,
-                "max_dashboards_per_workbook": self.dashboard_generation.max_dashboards_per_workbook,
-                "default_width": self.dashboard_generation.default_width,
-                "default_height": self.dashboard_generation.default_height,
-                "visualization_types": self.dashboard_generation.visualization_types,
-                "color_schemes": self.dashboard_generation.color_schemes
-            }
+            "file_storage": self.file_storage.model_dump(),
+            "dashboard_generation": self.dashboard_generation.model_dump(),
+            "data_processing": self.data_processing.model_dump(),
+            "meta_prompting": self.meta_prompting.model_dump(),
+            "streamlit": self.streamlit.model_dump()
         }
 
 # Global configuration instance

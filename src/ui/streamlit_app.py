@@ -16,7 +16,7 @@ from ..utils.config import get_config
 from ..utils.logger import get_logger, init_default_logging
 from ..utils.data_processor import DataProcessor
 from ..workflows.dashboard_workflow import DashboardGenerationWorkflow
-from ..models.schemas import validate_dataframe_schema
+from ..models.schemas import validate_dataframe_schema, AIAnalysisRequest
 
 # Initialize logging
 init_default_logging()
@@ -535,13 +535,15 @@ class StreamlitApp:
                 asyncio.set_event_loop(loop)
                 
                 try:
-                    result = loop.run_until_complete(self.workflow.analyzer.analyze_dataset({
-                        'dataset_schema': st.session_state.uploaded_data['schema'],
-                        'business_goals': st.session_state.requirements['business_goals'],
-                        'target_audience': st.session_state.requirements['target_audience'],
-                        'preferences': st.session_state.requirements['preferences'],
-                        'constraints': {}
-                    }))
+                    # Create AIAnalysisRequest from the form data
+                    analysis_request = AIAnalysisRequest(
+                        dataset_schema=st.session_state.uploaded_data['schema'],
+                        business_goals=st.session_state.requirements['business_goals'],
+                        target_audience=st.session_state.requirements['target_audience'],
+                        business_context=st.session_state.requirements.get('business_context', ''),
+                        preferences=st.session_state.requirements.get('preferences', {})
+                    )
+                    result = loop.run_until_complete(self.workflow.analyzer.analyze_dataset(analysis_request))
                     
                     st.session_state.ai_analysis = result
                     

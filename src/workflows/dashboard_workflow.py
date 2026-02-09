@@ -7,8 +7,7 @@ import asyncio
 from typing import Dict, Any, List, Optional, TypedDict
 from datetime import datetime
 
-from langgraph.graph import Graph, StateGraph, END
-from langgraph.prebuilt import ToolExecutor
+from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from ..models.schemas import (
@@ -57,9 +56,11 @@ class DashboardGenerationWorkflow:
         self.analyzer = TableauDashboardAnalyzer(config)
         self.generator = TableauWorkbookGenerator(config.file_storage.output_folder)
         
+        # Initialize checkpointer first before creating workflow
+        self.checkpointer = MemorySaver()
+        
         # Setup workflow graph
         self.workflow = self._create_workflow()
-        self.checkpointer = MemorySaver()
         
         logger.info("Dashboard generation workflow initialized")
     

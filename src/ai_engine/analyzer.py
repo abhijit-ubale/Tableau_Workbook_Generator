@@ -9,10 +9,12 @@ import asyncio
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
-from langchain_openai import AzureChatOpenAI
-from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
-from langchain.schema import BaseOutputParser
-from langchain.output_parsers import PydanticOutputParser
+from typing import Any
+from .llm_factory import create_chat_llm
+from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from langchain_core.output_parsers import BaseOutputParser, PydanticOutputParser
+
+
 from pydantic import BaseModel, Field
 
 from ..models.schemas import (
@@ -229,8 +231,8 @@ class TableauDashboardAnalyzer:
     ----------
     config : Config
         Application configuration object containing Azure OpenAI credentials and settings
-    llm : AzureChatOpenAI
-        Initialized Azure OpenAI language model instance
+    llm : Any
+        Initialized language model instance (provider-agnostic)
     data_analyzer_chain : LangChain Chain
         Chain for analyzing dataset characteristics and business potential
     dashboard_designer_chain : LangChain Chain
@@ -274,7 +276,7 @@ class TableauDashboardAnalyzer:
         self.kpi_generator_chain = self._create_kpi_generator_chain()
         self.visualization_recommender_chain = self._create_visualization_recommender_chain()
     
-    def _initialize_llm(self) -> AzureChatOpenAI:
+    def _initialize_llm(self) -> Any:
         """
         Initialize the Azure OpenAI language model.
         
@@ -304,18 +306,9 @@ class TableauDashboardAnalyzer:
         - azure_openai.top_p: Nucleus sampling parameter
         """
         try:
-            return AzureChatOpenAI(
-                azure_endpoint=self.config.azure_openai.endpoint,
-                api_key=self.config.azure_openai.api_key,
-                api_version=self.config.azure_openai.api_version,
-                deployment_name=self.config.azure_openai.deployment_name,
-                model_name=self.config.azure_openai.model_name,
-                temperature=self.config.azure_openai.temperature,
-                max_tokens=self.config.azure_openai.max_tokens,
-                top_p=self.config.azure_openai.top_p
-            )
+            return create_chat_llm(self.config)
         except Exception as e:
-            logger.error(f"Failed to initialize Azure OpenAI: {e}")
+            logger.error(f"Failed to initialize LLM: {e}")
             raise
     
     def _create_data_analyzer_chain(self):
@@ -340,11 +333,11 @@ class TableauDashboardAnalyzer:
         3. Detects data quality issues
         4. Recommends preprocessing steps
         
-        Uses meta-prompting from config.meta_prompting.system_prompts.data_analyzer
+        Uses meta-prompting from config.meta_prompting.system_prompts['data_analyzer']
         with critical instructions for consistent, high-quality analysis.
         """
         system_prompt = SystemMessagePromptTemplate.from_template(
-            self.config.meta_prompting.system_prompts.data_analyzer + 
+            self.config.meta_prompting.system_prompts.get('data_analyzer', '') + 
             """
             
             CRITICAL INSTRUCTIONS:
@@ -444,10 +437,10 @@ class TableauDashboardAnalyzer:
         - Performance considerations for large datasets
         - Alternative options for each recommendation
         
-        Uses meta-prompting from config.meta_prompting.system_prompts.dashboard_designer
+        Uses meta-prompting from config.meta_prompting.system_prompts['dashboard_designer']
         """
         system_prompt = SystemMessagePromptTemplate.from_template(
-            self.config.meta_prompting.system_prompts.dashboard_designer + 
+            self.config.meta_prompting.system_prompts.get('dashboard_designer', '') + 
             """
             
             CRITICAL INSTRUCTIONS:
@@ -515,10 +508,10 @@ class TableauDashboardAnalyzer:
         - Table calculations (RUNNING_SUM, RANK, etc.)
         - LOD expressions (FIXED, INCLUDE, EXCLUDE)
         
-        Uses meta-prompting from config.meta_prompting.system_prompts.worksheet_creator
+        Uses meta-prompting from config.meta_prompting.system_prompts['worksheet_creator']
         """
         system_prompt = SystemMessagePromptTemplate.from_template(
-            self.config.meta_prompting.system_prompts.worksheet_creator + 
+            self.config.meta_prompting.system_prompts.get('worksheet_creator', '') + 
             """
             
             CRITICAL INSTRUCTIONS:
