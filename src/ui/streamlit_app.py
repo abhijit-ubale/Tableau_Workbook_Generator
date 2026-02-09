@@ -12,11 +12,11 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 import json
 
-from ..utils.config import get_config
-from ..utils.logger import get_logger, init_default_logging
-from ..utils.data_processor import DataProcessor
-from ..workflows.dashboard_workflow import DashboardGenerationWorkflow
-from ..models.schemas import validate_dataframe_schema, AIAnalysisRequest
+from src.utils.config import get_config
+from src.utils.logger import get_logger, init_default_logging
+from src.utils.data_processor import DataProcessor
+from src.workflows.dashboard_workflow import DashboardGenerationWorkflow
+from src.models.schemas import validate_dataframe_schema, AIAnalysisRequest
 
 # Initialize logging
 init_default_logging()
@@ -67,7 +67,7 @@ class StreamlitApp:
         
         Configures page metadata and renders header, sidebar, and main content.
         """
-        # Configure Streamlit page
+        # Configure Streamlit page (MUST be first Streamlit call)
         st.set_page_config(
             page_title=self.config.streamlit.page_config.get("page_title", "Tableau Dashboard Generator"),
             page_icon=self.config.streamlit.page_config.get("page_icon", "📊"),
@@ -128,12 +128,14 @@ class StreamlitApp:
             output_format = st.selectbox(
                 "Output Format",
                 ["twbx", "twb"],
+                key="output_format_select",
                 help="TWBX includes data, TWB is XML only"
             )
             
             include_sample_data = st.checkbox(
                 "Include Sample Data",
                 value=True,
+                key="include_sample_data_check",
                 help="Include sample data in the generated workbook"
             )
             
@@ -146,6 +148,7 @@ class StreamlitApp:
                 color_scheme = st.selectbox(
                     "Color Scheme",
                     ["tableau10", "tableau20", "category10", "blues", "oranges", "greens"],
+                    key="color_scheme_select",
                     help="Default color scheme for visualizations"
                 )
                 
@@ -154,6 +157,7 @@ class StreamlitApp:
                     min_value=2,
                     max_value=15,
                     value=6,
+                    key="max_viz_slider",
                     help="Maximum number of visualizations to generate"
                 )
                 
@@ -212,6 +216,7 @@ class StreamlitApp:
         uploaded_file = st.file_uploader(
             "Choose a data file",
             type=self.config.data_processing.supported_formats,
+            key="data_file_uploader",
             help=f"Upload files up to {self.config.data_processing.max_file_size_mb}MB"
         )
         
@@ -232,34 +237,35 @@ class StreamlitApp:
                     temp_path = Path(self.config.file_storage.temp_folder) / uploaded_file.name
                     temp_path.parent.mkdir(parents=True, exist_ok=True)
                     
-                    with open(temp_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
-                    
-                    # Load data
-                    df = self.data_processor.load_data_file(temp_path)
-                    
-                    # Validate data
-                    validation_result = self.data_processor.validate_data(df)
-                    
-                    # Preprocess data
-                    df_processed = self.data_processor.preprocess_data(df)
-                    
-                    # Create dataset schema
-                    dataset_schema = self.data_processor.create_dataset_schema(
-                        df_processed, 
-                        uploaded_file.name.split('.')[0]
-                    )
-                    
-                    # Store in session state
-                    st.session_state.uploaded_data = {
-                        'dataframe': df_processed,
-                        'schema': dataset_schema,
-                        'validation': validation_result,
-                        'original_filename': uploaded_file.name
-                    }
-                    
-                    # Clean up temp file
-                    temp_path.unlink(missing_ok=True)
+                    try:
+                        with open(temp_path, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+                        
+                        # Load data
+                        df = self.data_processor.load_data_file(temp_path)
+                        
+                        # Validate data
+                        validation_result = self.data_processor.validate_data(df)
+                        
+                        # Preprocess data
+                        df_processed = self.data_processor.preprocess_data(df)
+                        
+                        # Create dataset schema
+                        dataset_schema = self.data_processor.create_dataset_schema(
+                            df_processed, 
+                            uploaded_file.name.split('.')[0]
+                        )
+                        
+                        # Store in session state
+                        st.session_state.uploaded_data = {
+                            'dataframe': df_processed,
+                            'schema': dataset_schema,
+                            'validation': validation_result,
+                            'original_filename': uploaded_file.name
+                        }
+                    finally:
+                        # Clean up temp file
+                        temp_path.unlink(missing_ok=True)
                 
                 # Display data preview and validation results
                 self.display_data_preview(df_processed, validation_result)
@@ -378,12 +384,14 @@ class StreamlitApp:
         selected_goals = st.multiselect(
             "Select business goals (choose multiple):",
             goal_options,
+            key="business_goals_multiselect",
             help="Select the main objectives for your dashboard"
         )
         
         # Custom goals
         custom_goals = st.text_area(
             "Additional custom goals:",
+            key="custom_goals_textarea",
             placeholder="Enter any specific requirements or questions...",
             help="Describe any specific analysis needs not covered above"
         )
@@ -409,12 +417,14 @@ class StreamlitApp:
                 "Technical team",
                 "External stakeholders"
             ],
+            key="target_audience_select",
             help="This helps AI tailor the complexity and focus of visualizations"
         )
         
         # Audience details
         audience_details = st.text_area(
             "Audience details (optional):",
+            key="audience_details_textarea",
             placeholder="Describe the audience's technical level, preferences, or specific needs...",
             help="Additional context about your audience"
         )
@@ -428,12 +438,14 @@ class StreamlitApp:
             dashboard_style = st.selectbox(
                 "Dashboard Style",
                 ["Executive Summary", "Detailed Analysis", "Operational Monitoring", "Exploratory"],
+                key="dashboard_style_select",
                 help="Choose the overall approach and complexity level"
             )
             
             update_frequency = st.selectbox(
                 "Expected Update Frequency",
                 ["Real-time", "Daily", "Weekly", "Monthly", "Quarterly", "Ad-hoc"],
+                key="update_frequency_select",
                 help="How often will this dashboard be updated?"
             )
         
@@ -441,12 +453,14 @@ class StreamlitApp:
             interactivity_level = st.selectbox(
                 "Interactivity Level",
                 ["High (many filters)", "Medium (some filters)", "Low (minimal filters)"],
+                key="interactivity_level_select",
                 help="How interactive should the dashboard be?"
             )
             
             priority_focus = st.selectbox(
                 "Priority Focus",
                 ["Visual appeal", "Data density", "Performance", "Simplicity"],
+                key="priority_focus_select",
                 help="What aspect should be prioritized?"
             )
         
@@ -493,7 +507,7 @@ class StreamlitApp:
             return
         
         # Run AI analysis
-        if st.button("🚀 Start AI Analysis", type="primary", use_container_width=True):
+        if st.button("🚀 Start AI Analysis", type="primary", use_container_width=True, key="start_analysis_btn"):
             self.run_ai_analysis()
         
         # Display analysis results
@@ -514,7 +528,7 @@ class StreamlitApp:
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                # Simulate progress updates (since we can't easily track internal AI progress)
+                # Simulate progress updates
                 status_text.text("Initializing AI analysis...")
                 progress_bar.progress(10)
                 time.sleep(1)
@@ -530,25 +544,31 @@ class StreamlitApp:
                 status_text.text("Creating recommendations...")
                 progress_bar.progress(90)
                 
-                # Run actual analysis
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
+                # Run actual analysis with proper async handling
                 try:
-                    # Create AIAnalysisRequest from the form data
-                    analysis_request = AIAnalysisRequest(
-                        dataset_schema=st.session_state.uploaded_data['schema'],
-                        business_goals=st.session_state.requirements['business_goals'],
-                        target_audience=st.session_state.requirements['target_audience'],
-                        business_context=st.session_state.requirements.get('business_context', ''),
-                        preferences=st.session_state.requirements.get('preferences', {})
-                    )
-                    result = loop.run_until_complete(self.workflow.analyzer.analyze_dataset(analysis_request))
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                     
+                    try:
+                        # Create AIAnalysisRequest from the form data
+                        analysis_request = AIAnalysisRequest(
+                            dataset_schema=st.session_state.uploaded_data['schema'],
+                            business_goals=st.session_state.requirements['business_goals'],
+                            target_audience=st.session_state.requirements['target_audience'],
+                            business_context=st.session_state.requirements.get('business_context', ''),
+                            preferences=st.session_state.requirements.get('preferences', {})
+                        )
+                        result = loop.run_until_complete(self.workflow.analyzer.analyze_dataset(analysis_request))
+                        
+                        st.session_state.ai_analysis = result
+                        
+                    finally:
+                        loop.close()
+                
+                except RuntimeError:
+                    # Handle case where event loop is already running
+                    result = asyncio.run(self.workflow.analyzer.analyze_dataset(analysis_request))
                     st.session_state.ai_analysis = result
-                    
-                finally:
-                    loop.close()
                 
                 progress_bar.progress(100)
                 status_text.text("Analysis complete!")
@@ -574,21 +594,24 @@ class StreamlitApp:
         with st.expander("🔍 Dataset Insights", expanded=True):
             insights = analysis.dataset_insights
             
-            if 'data_characteristics' in insights:
-                st.json(insights['data_characteristics'])
-            
-            if 'business_potential' in insights:
-                st.write("**Business Potential:**")
-                for potential in insights['business_potential']:
-                    st.write(f"• {potential}")
-            
-            if 'data_quality_issues' in insights:
-                st.write("**Data Quality Issues:**")
-                for issue in insights['data_quality_issues']:
-                    st.write(f"⚠️ {issue}")
+            if isinstance(insights, dict):
+                if 'data_characteristics' in insights:
+                    st.json(insights['data_characteristics'])
+                
+                if 'business_potential' in insights:
+                    st.write("**Business Potential:**")
+                    for potential in insights['business_potential']:
+                        st.write(f"• {potential}")
+                
+                if 'data_quality_issues' in insights:
+                    st.write("**Data Quality Issues:**")
+                    for issue in insights['data_quality_issues']:
+                        st.write(f"⚠️ {issue}")
+            else:
+                st.write(str(insights))
         
         # Recommended KPIs
-        with st.expander(f"📈 Recommended KPIs ({len(analysis.recommended_kpis)})", expanded=True):
+        with st.expander(f"📈 Recommended KPIs ({len(analysis.recommended_kpis) if analysis.recommended_kpis else 0})", expanded=True):
             if analysis.recommended_kpis:
                 kpi_data = []
                 for kpi in analysis.recommended_kpis:
@@ -604,15 +627,15 @@ class StreamlitApp:
                 st.info("No specific KPIs recommended")
         
         # Recommended visualizations
-        with st.expander(f"📊 Recommended Visualizations ({len(analysis.recommended_visualizations)})", expanded=True):
+        with st.expander(f"📊 Recommended Visualizations ({len(analysis.recommended_visualizations) if analysis.recommended_visualizations else 0})", expanded=True):
             if analysis.recommended_visualizations:
                 viz_data = []
                 for viz in analysis.recommended_visualizations:
                     viz_data.append({
                         "Chart Type": viz.chart_type.value,
                         "Title": viz.title,
-                        "X-Axis": ", ".join(viz.x_axis),
-                        "Y-Axis": ", ".join(viz.y_axis),
+                        "X-Axis": ", ".join(viz.x_axis) if viz.x_axis else "None",
+                        "Y-Axis": ", ".join(viz.y_axis) if viz.y_axis else "None",
                         "Color": viz.color_field or "None",
                         "Aggregation": viz.aggregation_type or "None"
                     })
@@ -623,13 +646,15 @@ class StreamlitApp:
         
         # Design recommendations
         with st.expander("🎨 Design Recommendations"):
-            st.write("**Dashboard Layout:**")
-            st.write(f"Confidence: {analysis.dashboard_recommendations.confidence_score:.1%}")
-            st.write(analysis.dashboard_recommendations.reasoning)
+            if analysis.dashboard_recommendations:
+                st.write("**Dashboard Layout:**")
+                st.write(f"Confidence: {analysis.dashboard_recommendations.confidence_score:.1%}")
+                st.write(analysis.dashboard_recommendations.reasoning)
             
-            st.write("**Color Scheme:**")
-            st.write(f"Confidence: {analysis.color_scheme_recommendation.confidence_score:.1%}")
-            st.write(analysis.color_scheme_recommendation.reasoning)
+            if analysis.color_scheme_recommendation:
+                st.write("**Color Scheme:**")
+                st.write(f"Confidence: {analysis.color_scheme_recommendation.confidence_score:.1%}")
+                st.write(analysis.color_scheme_recommendation.reasoning)
         
         # Performance considerations
         if analysis.performance_considerations:
@@ -658,26 +683,8 @@ class StreamlitApp:
             st.warning("Please run AI analysis first!")
             return
         
-        # Generation status
-        if st.session_state.workflow_status == 'generating':
-            st.info("🔄 Dashboard generation in progress...")
-            
-            # Show progress (placeholder)
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            # This would typically be replaced with real progress tracking
-            for i in range(100):
-                progress_bar.progress(i + 1)
-                status_text.text(f"Generating dashboard... {i+1}%")
-                time.sleep(0.05)
-            
-            st.session_state.workflow_status = 'ready'
-            st.success("Dashboard generation complete!")
-            st.experimental_rerun()
-        
         # Generation button
-        if st.button("🎨 Generate Tableau Dashboard", type="primary", use_container_width=True):
+        if st.button("🎨 Generate Tableau Dashboard", type="primary", use_container_width=True, key="generate_dashboard_btn"):
             self.start_dashboard_generation()
         
         # Display generation result
@@ -696,12 +703,38 @@ class StreamlitApp:
             st.session_state.workflow_status = 'generating'
             
             with st.spinner("🎨 Generating your Tableau dashboard..."):
-                # Run the complete workflow
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                progress_bar = st.progress(0)
+                status_text = st.empty()
                 
+                # Simulate progress
+                for i in range(90):
+                    progress_bar.progress(i + 1)
+                    status_text.text(f"Generating dashboard... {i+1}%")
+                    time.sleep(0.03)
+                
+                # Run the complete workflow with proper async handling
                 try:
-                    result = loop.run_until_complete(
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    try:
+                        result = loop.run_until_complete(
+                            self.workflow.run_workflow(
+                                dataset_schema=st.session_state.uploaded_data['schema'],
+                                business_goals=st.session_state.requirements['business_goals'],
+                                target_audience=st.session_state.requirements['target_audience'],
+                                user_preferences=st.session_state.requirements['preferences']
+                            )
+                        )
+                        
+                        st.session_state.generation_result = result
+                    
+                    finally:
+                        loop.close()
+                
+                except RuntimeError:
+                    # Handle case where event loop is already running
+                    result = asyncio.run(
                         self.workflow.run_workflow(
                             dataset_schema=st.session_state.uploaded_data['schema'],
                             business_goals=st.session_state.requirements['business_goals'],
@@ -709,20 +742,19 @@ class StreamlitApp:
                             user_preferences=st.session_state.requirements['preferences']
                         )
                     )
-                    
                     st.session_state.generation_result = result
-                    
-                finally:
-                    loop.close()
+                
+                progress_bar.progress(100)
+                status_text.text("Generation complete!")
             
             st.session_state.workflow_status = 'completed'
             
-            if st.session_state.generation_result['success']:
+            if st.session_state.generation_result.get('success'):
                 st.success("🎉 Dashboard generated successfully!")
             else:
                 st.error("❌ Dashboard generation failed!")
             
-            st.experimental_rerun()
+            st.rerun()
             
         except Exception as e:
             st.error(f"Generation failed: {e}")
@@ -738,50 +770,58 @@ class StreamlitApp:
         """
         result = st.session_state.generation_result
         
-        if result['success']:
+        if result.get('success'):
             st.success("✅ Dashboard Generated Successfully!")
             
             # Display metrics
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                st.metric("Execution Time", f"{result['execution_time_seconds']:.1f}s")
+                st.metric("Execution Time", f"{result.get('execution_time_seconds', 0):.1f}s")
             
             with col2:
                 st.metric("Warnings", len(result.get('warnings', [])))
             
             with col3:
-                workbook_spec = result['generation_result'].workbook_spec
-                total_worksheets = sum(len(d.worksheets) for d in workbook_spec.dashboards)
-                st.metric("Worksheets", total_worksheets)
+                if result.get('generation_result') and result['generation_result'].workbook_spec:
+                    workbook_spec = result['generation_result'].workbook_spec
+                    total_worksheets = sum(len(d.worksheets) for d in workbook_spec.dashboards) if workbook_spec.dashboards else 0
+                    st.metric("Worksheets", total_worksheets)
+                else:
+                    st.metric("Worksheets", 0)
             
             # File download
-            if result['generation_result'] and result['generation_result'].file_path:
+            if result.get('generation_result') and result['generation_result'].file_path:
                 file_path = Path(result['generation_result'].file_path)
                 
                 if file_path.exists():
-                    with open(file_path, 'rb') as f:
-                        file_data = f.read()
+                    try:
+                        with open(file_path, 'rb') as f:
+                            file_data = f.read()
+                        
+                        st.download_button(
+                            label="📥 Download Tableau Workbook",
+                            data=file_data,
+                            file_name=file_path.name,
+                            mime="application/octet-stream",
+                            use_container_width=True,
+                            key="download_workbook_btn"
+                        )
+                        
+                        st.info(f"💾 File saved as: {file_path.name}")
                     
-                    st.download_button(
-                        label="📥 Download Tableau Workbook",
-                        data=file_data,
-                        file_name=file_path.name,
-                        mime="application/octet-stream",
-                        use_container_width=True
-                    )
-                    
-                    st.info(f"💾 File saved as: {file_path.name}")
+                    except IOError as e:
+                        st.error(f"Failed to read file: {e}")
             
             # Display workbook details
-            if result['generation_result']:
+            if result.get('generation_result') and result['generation_result'].workbook_spec:
                 with st.expander("📋 Workbook Details"):
                     workbook_spec = result['generation_result'].workbook_spec
                     
                     workbook_info = {
                         "Name": workbook_spec.name,
                         "Description": workbook_spec.description,
-                        "Dashboards": len(workbook_spec.dashboards),
+                        "Dashboards": len(workbook_spec.dashboards) if workbook_spec.dashboards else 0,
                         "Created By": workbook_spec.created_by,
                         "Version": workbook_spec.version,
                         "Data Source": workbook_spec.data_source
