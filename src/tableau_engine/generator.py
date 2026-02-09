@@ -1,53 +1,27 @@
 """
-Tableau Workbook Generation Engine.
-
-This module provides the core functionality for converting AI-generated dashboard
-specifications into actual Tableau workbook files. It handles XML generation,
-workbook packaging, and data embedding for both .twb (text) and .twbx (packaged)
-formats.
-
-The generation pipeline:
-1. Parse GenerationRequest with AI analysis and dataset schema
-2. Create workbook specification with dashboards and worksheets
-3. Generate Tableau XML for workbook structure
-4. Generate XML for data source definitions
-5. Package into .twb or .twbx file format
-6. Return GenerationResult with file path and status
-
-Supports:
-- Multiple dashboards per workbook
-- Multiple worksheets (visualizations) per dashboard
-- Data source definitions and metadata
-- Column type mappings and aggregations
-- Calculated fields with Tableau formulas
-- Dashboard layouts and sizing
-- TWBX packaging with data extraction
-
-Example:
-    >>> generator = TableauWorkbookGenerator(output_directory="./output")
-    >>> result = generator.generate_workbook(generation_request)
-    >>> if result.success:
-    ...     print(f"Generated: {result.file_path}")
-    ... else:
-    ...     print(f"Error: {result.error_message}")
+Streamlit web interface for the Tableau Dashboard Generator.
+Provides an intuitive user interface for data upload and dashboard generation.
 """
 
 import os
 import json
 import zipfile
+import uuid
+import csv
+import io
 from typing import Dict, List, Optional, Any
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
-import uuid
+import random
 
-from ..models.schemas import (
+from src.models.schemas import (
     TableauWorkbookSpec, DashboardSpec, WorksheetSpec, 
     VisualizationSpec, KPISpecification, GenerationRequest,
     GenerationResult, VisualizationType, ColorScheme
 )
-from ..utils.logger import get_logger
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -889,6 +863,11 @@ class TableauWorkbookGenerator:
         >>> generator._get_tableau_data_type(DataType.INTEGER)
         'integer'
         """
+        try:
+            data_type_value = data_type.value if hasattr(data_type, 'value') else str(data_type)
+        except (AttributeError, ValueError):
+            data_type_value = str(data_type)
+        
         mapping = {
             "integer": "integer",
             "float": "real",
@@ -897,7 +876,7 @@ class TableauWorkbookGenerator:
             "boolean": "boolean",
             "categorical": "string"
         }
-        return mapping.get(data_type.value, "string")
+        return mapping.get(data_type_value, "string")
     
     def _create_worksheet_element(self, parent: Element, worksheet_spec: WorksheetSpec, datasource: Element):
         """
@@ -1572,12 +1551,19 @@ class TableauWorkbookGenerator:
         title_run = SubElement(title_text, "run")
         title_run.text = worksheet_spec.visualization.title
     
-    def _create_windows_element(self, parent: Element, workbook_spec: TableauWorkbookSpec):
+    def _create_windows_element(self, parent: Element, workbook_spec: TableauWorkbookSpec) -> None:
         """Create windows element for Tableau Desktop compatibility"""
+        # Safely get first worksheet name
+        first_worksheet_name = "Sheet1"
+        if workbook_spec.dashboards and len(workbook_spec.dashboards) > 0:
+            dashboard = workbook_spec.dashboards[0]
+            if dashboard.worksheets and len(dashboard.worksheets) > 0:
+                first_worksheet_name = dashboard.worksheets[0].name
+        
         window = SubElement(parent, "window")
         window.set("class", "worksheet")
         window.set("maximized", "true")
-        window.set("name", workbook_spec.dashboards[0].worksheets[0].name if workbook_spec.dashboards else "Sheet1")
+        window.set("name", first_worksheet_name)
         
         # Add cards
         cards = SubElement(window, "cards")
@@ -2025,9 +2011,6 @@ class TableauWorkbookGenerator:
         _generate_synthetic_value : Synthetic value generation for columns
         _create_twbx_file : Package with sample data
         """
-        import csv
-        import io
-        
         output = io.StringIO()
         writer = csv.writer(output)
         
@@ -2039,7 +2022,7 @@ class TableauWorkbookGenerator:
         for i in range(min(100, dataset_schema.total_rows)):
             row = []
             for col in dataset_schema.columns:
-                if col.sample_values:
+                if hasattr(col, 'sample_values') and col.sample_values:
                     # Use actual sample values if available
                     sample_value = col.sample_values[i % len(col.sample_values)]
                     row.append(sample_value)
@@ -2050,7 +2033,7 @@ class TableauWorkbookGenerator:
         
         return output.getvalue()
     
-    def _generate_synthetic_value(self, column, index: int):
+    def _generate_synthetic_value(self, column, index: int) -> Any:
         """
         Generate synthetic sample value for a column.
         
@@ -2169,22 +2152,24 @@ class TableauWorkbookGenerator:
         DataColumn : Column specification with data types
         DataType : Enumeration of supported data types
         """
-        import random
+        try:
+            data_type_value = column.data_type.value if hasattr(column.data_type, 'value') else str(column.data_type)
+        except (AttributeError, ValueError):
+            data_type_value = str(column.data_type)
         
-        if column.data_type.value == "integer":
+        if data_type_value == "integer":
             return random.randint(1, 1000)
-        elif column.data_type.value == "float":
+        elif data_type_value == "float":
             return round(random.uniform(0, 1000), 2)
-        elif column.data_type.value == "string":
+        elif data_type_value == "string":
             return f"{column.name}_{index}"
-        elif column.data_type.value == "categorical":
+        elif data_type_value == "categorical":
             categories = ["Category A", "Category B", "Category C", "Category D"]
             return random.choice(categories)
-        elif column.data_type.value == "datetime":
-            from datetime import datetime, timedelta
+        elif data_type_value == "datetime":
             base_date = datetime(2023, 1, 1)
             return (base_date + timedelta(days=index)).strftime("%Y-%m-%d")
-        elif column.data_type.value == "boolean":
+        elif data_type_value == "boolean":
             return random.choice([True, False])
         else:
             return f"Value_{index}"
