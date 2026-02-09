@@ -53,7 +53,7 @@ data_processing:
     - parquet
   
   auto_detect_types: true
-  sample_rows_for_analysis: 1000
+  sample_rows_for_analysis: 5000
   null_threshold: 0.3
 
 meta_prompting:

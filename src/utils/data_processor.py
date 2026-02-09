@@ -239,11 +239,15 @@ class DataProcessor:
         """
         Preprocess data for better analysis and visualization.
         
+        NOTE: This method NO LONGER samples data. Sampling is now done separately 
+        in streamlit_app.py to keep full data for workbook generation while using
+        sampled data only for AI analysis.
+        
         Args:
             df: Input DataFrame
             
         Returns:
-            Preprocessed DataFrame
+            Preprocessed DataFrame (full dataset, no sampling)
         """
         logger.info("Starting data preprocessing")
         
@@ -254,11 +258,6 @@ class DataProcessor:
         
         # Handle data types
         df_processed = self._optimize_data_types(df_processed)
-        
-        # Sample data if too large
-        if len(df_processed) > self.sample_rows:
-            logger.info(f"Sampling data from {len(df_processed)} to {self.sample_rows} rows")
-            df_processed = df_processed.sample(n=self.sample_rows, random_state=42)
         
         logger.info("Data preprocessing completed")
         return df_processed

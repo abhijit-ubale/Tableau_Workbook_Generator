@@ -247,19 +247,31 @@ class StreamlitApp:
                         # Validate data
                         validation_result = self.data_processor.validate_data(df)
                         
-                        # Preprocess data
+                        # Preprocess data (includes cleaning, but NOT sampling)
                         df_processed = self.data_processor.preprocess_data(df)
                         
-                        # Create dataset schema
-                        dataset_schema = self.data_processor.create_dataset_schema(
+                        # Create two schemas:
+                        # 1. Full schema from complete dataset (for workbook generation)
+                        dataset_schema_full = self.data_processor.create_dataset_schema(
                             df_processed, 
                             uploaded_file.name.split('.')[0]
                         )
                         
+                        # 2. Sampled schema for AI analysis (faster analysis)
+                        if len(df_processed) > self.data_processor.sample_rows:
+                            df_sampled = df_processed.sample(n=self.data_processor.sample_rows, random_state=42)
+                            dataset_schema_analysis = self.data_processor.create_dataset_schema(
+                                df_sampled,
+                                uploaded_file.name.split('.')[0]
+                            )
+                        else:
+                            dataset_schema_analysis = dataset_schema_full
+                        
                         # Store in session state
                         st.session_state.uploaded_data = {
                             'dataframe': df_processed,
-                            'schema': dataset_schema,
+                            'schema_full': dataset_schema_full,  # Full dataset for generation
+                            'schema_analysis': dataset_schema_analysis,  # Sampled for AI analysis
                             'validation': validation_result,
                             'original_filename': uploaded_file.name
                         }
@@ -282,7 +294,7 @@ class StreamlitApp:
             
             # Data summary
             with st.expander("📊 Data Summary", expanded=True):
-                schema = st.session_state.uploaded_data['schema']
+                schema = st.session_state.uploaded_data['schema_full']  # Show full dataset stats
                 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
@@ -308,7 +320,7 @@ class StreamlitApp:
         
         # Data preview
         st.subheader("🔍 Data Preview")
-        st.dataframe(df.head(10), use_container_width=True)
+        st.dataframe(df.head(10), width='stretch')
         
         # Validation results
         st.subheader("✅ Data Validation")
@@ -348,7 +360,7 @@ class StreamlitApp:
                     "Role": col.recommended_role or "auto"
                 })
             
-            st.dataframe(pd.DataFrame(col_data), use_container_width=True)
+            st.dataframe(pd.DataFrame(col_data), width='stretch')
     
     def render_requirements_tab(self):
         """
@@ -507,7 +519,7 @@ class StreamlitApp:
             return
         
         # Run AI analysis
-        if st.button("🚀 Start AI Analysis", type="primary", use_container_width=True, key="start_analysis_btn"):
+        if st.button("🚀 Start AI Analysis", type="primary", width='stretch', key="start_analysis_btn"):
             self.run_ai_analysis()
         
         # Display analysis results
@@ -622,7 +634,7 @@ class StreamlitApp:
                         "Format": kpi.format_string
                     })
                 
-                st.dataframe(pd.DataFrame(kpi_data), use_container_width=True)
+                st.dataframe(pd.DataFrame(kpi_data), width='stretch')
             else:
                 st.info("No specific KPIs recommended")
         
@@ -640,7 +652,7 @@ class StreamlitApp:
                         "Aggregation": viz.aggregation_type or "None"
                     })
                 
-                st.dataframe(pd.DataFrame(viz_data), use_container_width=True)
+                st.dataframe(pd.DataFrame(viz_data), width='stretch')
             else:
                 st.info("No visualizations recommended")
         
@@ -684,7 +696,7 @@ class StreamlitApp:
             return
         
         # Generation button
-        if st.button("🎨 Generate Tableau Dashboard", type="primary", use_container_width=True, key="generate_dashboard_btn"):
+        if st.button("🎨 Generate Tableau Dashboard", type="primary", width='stretch', key="generate_dashboard_btn"):
             self.start_dashboard_generation()
         
         # Display generation result
@@ -720,7 +732,8 @@ class StreamlitApp:
                     try:
                         result = loop.run_until_complete(
                             self.workflow.run_workflow(
-                                dataset_schema=st.session_state.uploaded_data['schema'],
+                                dataset_schema_analysis=st.session_state.uploaded_data['schema_analysis'],
+                                dataset_schema_generation=st.session_state.uploaded_data['schema_full'],
                                 business_goals=st.session_state.requirements['business_goals'],
                                 target_audience=st.session_state.requirements['target_audience'],
                                 user_preferences=st.session_state.requirements['preferences']
@@ -736,7 +749,8 @@ class StreamlitApp:
                     # Handle case where event loop is already running
                     result = asyncio.run(
                         self.workflow.run_workflow(
-                            dataset_schema=st.session_state.uploaded_data['schema'],
+                            dataset_schema_analysis=st.session_state.uploaded_data['schema_analysis'],
+                            dataset_schema_generation=st.session_state.uploaded_data['schema_full'],
                             business_goals=st.session_state.requirements['business_goals'],
                             target_audience=st.session_state.requirements['target_audience'],
                             user_preferences=st.session_state.requirements['preferences']
@@ -804,7 +818,7 @@ class StreamlitApp:
                             data=file_data,
                             file_name=file_path.name,
                             mime="application/octet-stream",
-                            use_container_width=True,
+                            width='stretch',
                             key="download_workbook_btn"
                         )
                         

@@ -25,7 +25,8 @@ logger = get_logger(__name__)
 class WorkflowState(TypedDict):
     """State structure for the dashboard generation workflow"""
     # Input data
-    dataset_schema: Optional[DatasetSchema]
+    dataset_schema_analysis: Optional[DatasetSchema]  # Sampled schema for AI analysis
+    dataset_schema_generation: Optional[DatasetSchema]  # Full schema for workbook generation
     business_goals: List[str]
     target_audience: str
     user_preferences: Dict[str, Any]
@@ -118,7 +119,8 @@ class DashboardGenerationWorkflow:
     
     async def run_workflow(
         self,
-        dataset_schema: DatasetSchema,
+        dataset_schema_analysis: DatasetSchema,
+        dataset_schema_generation: DatasetSchema,
         business_goals: List[str],
         target_audience: str,
         user_preferences: Optional[Dict[str, Any]] = None,
@@ -128,7 +130,8 @@ class DashboardGenerationWorkflow:
         Execute the complete dashboard generation workflow.
         
         Args:
-            dataset_schema: Schema of the input dataset
+            dataset_schema_analysis: Sampled schema for AI analysis
+            dataset_schema_generation: Full schema for workbook generation
             business_goals: List of business objectives
             target_audience: Target audience description
             user_preferences: Optional user preferences
@@ -144,7 +147,8 @@ class DashboardGenerationWorkflow:
         
         # Initialize workflow state
         initial_state = WorkflowState(
-            dataset_schema=dataset_schema,
+            dataset_schema_analysis=dataset_schema_analysis,
+            dataset_schema_generation=dataset_schema_generation,
             business_goals=business_goals,
             target_audience=target_audience,
             user_preferences=user_preferences or {},
@@ -197,9 +201,13 @@ class DashboardGenerationWorkflow:
         state["current_step"] = "validate_input"
         
         try:
-            # Validate dataset schema
-            if not state["dataset_schema"]:
-                state["errors"].append("Dataset schema is required")
+            # Validate dataset schemas
+            if not state["dataset_schema_analysis"]:
+                state["errors"].append("Dataset schema (analysis) is required")
+                return state
+            
+            if not state["dataset_schema_generation"]:
+                state["errors"].append("Dataset schema (generation) is required")
                 return state
             
             if not state["business_goals"]:
@@ -252,9 +260,9 @@ class DashboardGenerationWorkflow:
         state["current_step"] = "analyze_data"
         
         try:
-            # Create AI analysis request
+            # Create AI analysis request using SAMPLED schema for faster analysis
             analysis_request = AIAnalysisRequest(
-                dataset_schema=state["dataset_schema"],
+                dataset_schema=state["dataset_schema_analysis"],
                 business_goals=state["business_goals"],
                 target_audience=state["target_audience"],
                 preferences=state["user_preferences"],
@@ -282,9 +290,9 @@ class DashboardGenerationWorkflow:
         state["current_step"] = "generate_workbook"
         
         try:
-            # Create generation request
+            # Create generation request using FULL schema for complete data in workbook
             generation_request = GenerationRequest(
-                dataset_schema=state["dataset_schema"],
+                dataset_schema=state["dataset_schema_generation"],
                 ai_analysis=state["ai_analysis"],
                 user_preferences=state["user_preferences"],
                 output_format="twbx",

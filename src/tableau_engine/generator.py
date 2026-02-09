@@ -583,11 +583,11 @@ class TableauWorkbookGenerator:
         if hasattr(dataset_schema, "calculated_fields") and dataset_schema.calculated_fields:
             for calc_field in dataset_schema.calculated_fields:
                 column_instance = SubElement(column_instances, "column-instance")
-                column_instance.set("column", f"[{calc_field['name']}]")
+                column_instance.set("column", f"[{calc_field.name}]")
                 column_instance.set("derivation", "Calculation")
-                column_instance.set("name", f"[{calc_field['name']}]")
+                column_instance.set("name", f"[{calc_field.name}]")
                 column_instance.set("pivot", "key")
-                column_instance.set("type", "nominal" if calc_field.get('role', 'dimension') == "dimension" else "quantitative")
+                column_instance.set("type", "nominal" if calc_field.role == "dimension" else "quantitative")
 
         return datasource
     
@@ -764,35 +764,35 @@ class TableauWorkbookGenerator:
 
         # Add remote properties
         remote_name = SubElement(metadata, "remote-name")
-        remote_name.text = calc_field['name']
+        remote_name.text = calc_field.name
 
         remote_type = SubElement(metadata, "remote-type")
-        remote_type.text = self._get_tableau_data_type(calc_field['data_type'])
+        remote_type.text = self._get_tableau_data_type(calc_field.data_type)
 
         local_name = SubElement(metadata, "local-name")
-        local_name.text = f"[{calc_field['name']}]"
+        local_name.text = f"[{calc_field.name}]"
 
         parent_name = SubElement(metadata, "parent-name")
-        parent_name.text = f"[{calc_field['name']}]"
+        parent_name.text = f"[{calc_field.name}]"
 
         remote_alias = SubElement(metadata, "remote-alias")
-        remote_alias.text = calc_field['name']
+        remote_alias.text = calc_field.name
 
         ordinal_elem = SubElement(metadata, "ordinal")
         ordinal_elem.text = str(ordinal)
 
         local_type = SubElement(metadata, "local-type")
-        local_type.text = self._get_tableau_data_type(calc_field['data_type'])
+        local_type.text = self._get_tableau_data_type(calc_field.data_type)
 
         aggregation = SubElement(metadata, "aggregation")
-        aggregation.text = "Sum" if calc_field.get('role', 'measure') == "measure" else "Count"
+        aggregation.text = "Sum" if calc_field.role == "measure" else "Count"
 
         contains_null = SubElement(metadata, "contains-null")
         contains_null.text = "false"
 
         # Calculation element
         calculation = SubElement(metadata, "calculation")
-        calculation.set("formula", calc_field['formula'])
+        calculation.set("formula", calc_field.formula)
         calculation.set("type", "tableau")
 
     def _get_tableau_data_type(self, data_type) -> str:
