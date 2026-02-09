@@ -351,7 +351,7 @@ class StreamlitApp:
         # Column analysis
         with st.expander("📋 Column Details"):
             col_data = []
-            for col in st.session_state.uploaded_data['schema'].columns:
+            for col in st.session_state.uploaded_data['schema_full'].columns:
                 col_data.append({
                     "Column": col.name,
                     "Type": col.data_type.value,
@@ -562,9 +562,9 @@ class StreamlitApp:
                     asyncio.set_event_loop(loop)
                     
                     try:
-                        # Create AIAnalysisRequest from the form data
+                        # Create AIAnalysisRequest from the form data using sampled schema
                         analysis_request = AIAnalysisRequest(
-                            dataset_schema=st.session_state.uploaded_data['schema'],
+                            dataset_schema=st.session_state.uploaded_data['schema_analysis'],
                             business_goals=st.session_state.requirements['business_goals'],
                             target_audience=st.session_state.requirements['target_audience'],
                             business_context=st.session_state.requirements.get('business_context', ''),

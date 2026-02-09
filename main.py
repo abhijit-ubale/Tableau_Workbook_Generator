@@ -51,11 +51,22 @@ def main():
             logger.info(f"Debug mode: {config.application.debug}")
             logger.info(f"Log level: {config.application.log_level}")
             
-            # Check Azure OpenAI configuration
-            if not config.azure_openai.api_key:
-                logger.warning("Azure OpenAI API key not configured - some features may not work")
+            # Check LLM provider configuration
+            provider = config.application.llm_provider if hasattr(config.application, 'llm_provider') else 'azure'
+            logger.info(f"LLM Provider: {provider}")
+            
+            if provider.lower() in ('azure', 'azureopenai', 'azure_openai'):
+                if not config.azure_openai.api_key:
+                    logger.warning("Azure OpenAI API key not configured - some features may not work")
+                else:
+                    logger.info("Azure OpenAI configuration loaded")
+            elif provider.lower() in ('gemini', 'google'):
+                if config.llm.api_key:
+                    logger.info("Google Gemini configuration loaded")
+                else:
+                    logger.warning("Google Gemini API key not configured - some features may not work")
             else:
-                logger.info("Azure OpenAI configuration loaded")
+                logger.info(f"Using {provider} as LLM provider")
             
         except Exception as e:
             logger.error(f"Configuration validation failed: {e}")
