@@ -544,10 +544,25 @@ class TableauDashboardAnalyzer:
             Business Goals: {business_goals}
             
             Create 3-7 relevant KPIs with proper Tableau calculations.
+            Respond with ONLY JSON array with fields: name, description, calculation, format_string, priority.
             """
         )
         
-        return ChatPromptTemplate.from_messages([system_prompt, human_prompt]) | self.llm
+        class KPIResponseParser(BaseOutputParser):
+            def parse(self, text: str):
+                try:
+                    cleaned = text.strip()
+                    if cleaned.startswith("```json"):
+                        cleaned = cleaned[7:-3]
+                    elif cleaned.startswith("```"):
+                        cleaned = cleaned[3:-3]
+                    data = json.loads(cleaned)
+                    return data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+                except Exception as e:
+                    logger.warning(f"KPI parsing failed: {e}. Returning empty.")
+                    return []
+        
+        return ChatPromptTemplate.from_messages([system_prompt, human_prompt]) | self.llm | KPIResponseParser()
     
     def _create_visualization_recommender_chain(self):
         """
@@ -578,28 +593,12 @@ class TableauDashboardAnalyzer:
             based on data characteristics and business goals.
             
             CRITICAL INSTRUCTIONS:
-            1. Recommend appropriate chart types for each data relationship
+            1. Recommend 4-8 appropriate chart types for each data relationship
             2. Specify exact field mappings (x-axis, y-axis, color, size)
             3. Consider data types and cardinality
             4. Optimize for user understanding and insight discovery
             5. Ensure visualizations work well together in a dashboard
-            
-            Response format (JSON Array):
-            [
-              {
-                "chart_type": "bar",
-                "title": "Chart Title",
-                "x_axis": ["field1"],
-                "y_axis": ["field2"],
-                "color_field": "field3",
-                "size_field": null,
-                "filters": [],
-                "color_scheme": "tableau10",
-                "show_labels": true,
-                "show_legend": true,
-                "aggregation_type": "sum"
-              }
-            ]
+            6. Return ONLY valid JSON array, no markdown
             """
         )
         
@@ -613,10 +612,25 @@ class TableauDashboardAnalyzer:
             KPIs: {kpis}
             
             Create 4-8 complementary visualizations that tell a cohesive story.
+            Respond with ONLY JSON array format with fields: chart_type, title, x_axis, y_axis, color_field, aggregation_type, color_scheme.
             """
         )
         
-        return ChatPromptTemplate.from_messages([system_prompt, human_prompt]) | self.llm
+        class VisualizationResponseParser(BaseOutputParser):
+            def parse(self, text: str):
+                try:
+                    cleaned = text.strip()
+                    if cleaned.startswith("```json"):
+                        cleaned = cleaned[7:-3]
+                    elif cleaned.startswith("```"):
+                        cleaned = cleaned[3:-3]
+                    data = json.loads(cleaned)
+                    return data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+                except Exception as e:
+                    logger.warning(f"Visualization parsing failed: {e}. Returning fallback.")
+                    return []
+        
+        return ChatPromptTemplate.from_messages([system_prompt, human_prompt]) | self.llm | VisualizationResponseParser()
     
     async def analyze_dataset(self, request: AIAnalysisRequest) -> AIAnalysisResponse:
         """
@@ -950,8 +964,17 @@ class TableauDashboardAnalyzer:
                 "business_goals": ", ".join(business_goals)
             })
             
-            kpi_data = json.loads(result.content)
-            return [KPISpecification(**kpi) for kpi in kpi_data]
+            # result is already a list from the KPIResponseParser
+            kpi_data = result if isinstance(result, list) else json.loads(result.content if hasattr(result, 'content') else result)
+            return [KPISpecification(**kpi) for kpi in kpi_data] if kpi_data else [
+                KPISpecification(
+                    name="Record Count",
+                    description="Total number of records",
+                    calculation="COUNTD([Record Number])",
+                    format_string="#,##0",
+                    priority=1
+                )
+            ]
         except Exception as e:
             logger.warning(f"KPI generation failed: {e}")
             # Return default KPIs
@@ -1013,8 +1036,13 @@ class TableauDashboardAnalyzer:
                 "kpis": json.dumps([kpi.dict() for kpi in kpis], indent=2)
             })
             
-            viz_data = json.loads(result.content)
-            return [VisualizationSpec(**viz) for viz in viz_data]
+            # result is already a list from the VisualizationResponseParser
+            viz_data = result if isinstance(result, list) else json.loads(result.content if hasattr(result, 'content') else result)
+            if viz_data:
+                return [VisualizationSpec(**viz) for viz in viz_data]
+            else:
+                logger.warning("Visualization chain returned empty list, using defaults")
+                return self._generate_default_visualizations(schema)
         except Exception as e:
             logger.warning(f"Visualization recommendation failed: {e}")
             # Return default visualizations based on column types
@@ -1056,6 +1084,7 @@ class TableauDashboardAnalyzer:
         numeric_cols = [col for col in schema.columns if col.data_type in [DataType.INTEGER, DataType.FLOAT]]
         categorical_cols = [col for col in schema.columns if col.data_type == DataType.CATEGORICAL]
         
+        # Bar chart - numeric by categorical
         if numeric_cols and categorical_cols:
             visualizations.append(
                 VisualizationSpec(
@@ -1063,10 +1092,12 @@ class TableauDashboardAnalyzer:
                     title=f"{numeric_cols[0].name} by {categorical_cols[0].name}",
                     x_axis=[categorical_cols[0].name],
                     y_axis=[numeric_cols[0].name],
-                    aggregation_type="sum"
+                    aggregation_type="sum",
+                    color_scheme="tableau10"
                 )
             )
         
+        # Scatter plot - numeric vs numeric
         if len(numeric_cols) >= 2:
             visualizations.append(
                 VisualizationSpec(
@@ -1074,9 +1105,61 @@ class TableauDashboardAnalyzer:
                     title=f"{numeric_cols[0].name} vs {numeric_cols[1].name}",
                     x_axis=[numeric_cols[0].name],
                     y_axis=[numeric_cols[1].name],
-                    aggregation_type="avg"
+                    aggregation_type="avg",
+                    color_scheme="tableau10"
                 )
             )
+        
+        # Line chart - trends over first numeric column
+        if len(numeric_cols) >= 1:
+            visualizations.append(
+                VisualizationSpec(
+                    chart_type=VisualizationType.LINE,
+                    title=f"Trend of {numeric_cols[0].name}",
+                    x_axis=[numeric_cols[0].name] if len(numeric_cols) > 1 else ["Record Number"],
+                    y_axis=[numeric_cols[0].name],
+                    aggregation_type="sum",
+                    color_scheme="tableau10"
+                )
+            )
+        
+        # Pie chart - distribution by first categorical
+        if len(categorical_cols) >= 1 and len(numeric_cols) >= 1:
+            visualizations.append(
+                VisualizationSpec(
+                    chart_type=VisualizationType.PIE,
+                    title=f"Distribution of {categorical_cols[0].name}",
+                    x_axis=[categorical_cols[0].name],
+                    y_axis=[numeric_cols[0].name],
+                    aggregation_type="count",
+                    color_scheme="tableau10"
+                )
+            )
+        
+        # If only one type exists, create a basic table-like view
+        if not visualizations:
+            if numeric_cols:
+                visualizations.append(
+                    VisualizationSpec(
+                        chart_type=VisualizationType.BAR,
+                        title=f"Summary of {numeric_cols[0].name}",
+                        x_axis=["Record Number"],
+                        y_axis=[numeric_cols[0].name],
+                        aggregation_type="sum",
+                        color_scheme="tableau10"
+                    )
+                )
+            elif categorical_cols:
+                visualizations.append(
+                    VisualizationSpec(
+                        chart_type=VisualizationType.BAR,
+                        title=f"Count by {categorical_cols[0].name}",
+                        x_axis=[categorical_cols[0].name],
+                        y_axis=["COUNT(*)"],
+                        aggregation_type="count",
+                        color_scheme="tableau10"
+                    )
+                )
         
         return visualizations
     

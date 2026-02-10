@@ -12,8 +12,8 @@ from dotenv import load_dotenv
 
 class LLMConfig(BaseModel):
     """Generic LLM configuration to support multiple providers."""
-    provider: str = "azure"
-    model_name: str = "gpt-4-turbo"
+    provider: str = "gemini"
+    model_name: str = "gemini-2.5-flash"
     api_key: str = ""
     endpoint: str = ""
     deployment_name: str = ""

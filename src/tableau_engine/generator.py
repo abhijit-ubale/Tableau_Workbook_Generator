@@ -306,7 +306,10 @@ class TableauWorkbookGenerator:
         """
         # Create worksheets from AI recommendations
         worksheets = []
+        logger.info(f"Creating worksheets from {len(request.ai_analysis.recommended_visualizations)} recommended visualizations")
+        
         for i, viz_spec in enumerate(request.ai_analysis.recommended_visualizations):
+            logger.debug(f"Creating worksheet {i+1}: {viz_spec.title} ({viz_spec.chart_type})")
             worksheet = WorksheetSpec(
                 name=f"Sheet {i+1}",
                 visualization=viz_spec,
@@ -314,6 +317,9 @@ class TableauWorkbookGenerator:
                 description=f"Generated visualization: {viz_spec.title}"
             )
             worksheets.append(worksheet)
+        
+        if not worksheets:
+            logger.warning("No visualizations recommended - creating empty dashboard")
         
         # Create a main dashboard
         dashboard = DashboardSpec(
@@ -547,9 +553,10 @@ class TableauWorkbookGenerator:
         named_connection.set("name", "textscan")
         
         # Add actual connection details
+        # For TWBX files, data will be embedded, so use relative path within package
         inner_connection = SubElement(named_connection, "connection")
         inner_connection.set("class", "textscan")
-        inner_connection.set("directory", str(self.output_directory))
+        inner_connection.set("directory", "Data")  # Relative path within TWBX
         inner_connection.set("filename", f"{dataset_schema.name}.csv")
         inner_connection.set("password", "")
         inner_connection.set("server", "")
@@ -1892,10 +1899,25 @@ class TableauWorkbookGenerator:
             # Add datasource
             zipf.writestr("Data/Datasources/datasource.tds", datasource_xml)
             
-            # Add sample data if requested
+            # Add sample data if requested - use actual data from CSV file if it exists
             if request.include_sample_data:
-                sample_data = self._generate_sample_csv(request.dataset_schema)
-                zipf.writestr(f"Data/{request.dataset_schema.name}.csv", sample_data)
+                # Try to find the actual data file from temp folder
+                import os
+                temp_folder = Path(__file__).parent.parent.parent / "data" / "temp"
+                csv_files = list(temp_folder.glob("*.csv")) if temp_folder.exists() else []
+                
+                if csv_files:
+                    # Use the first CSV file found
+                    actual_csv_path = csv_files[0]
+                    with open(actual_csv_path, 'r', encoding='utf-8') as f:
+                        sample_data = f.read()
+                    zipf.writestr(f"Data/{request.dataset_schema.name}.csv", sample_data)
+                    logger.info(f"Embedded actual data from {actual_csv_path} ({len(sample_data)} bytes)")
+                else:
+                    # Fall back to generating synthetic sample data
+                    sample_data = self._generate_sample_csv(request.dataset_schema)
+                    zipf.writestr(f"Data/{request.dataset_schema.name}.csv", sample_data)
+                    logger.info(f"Generated synthetic sample data ({len(sample_data)} bytes)")
         
         return file_path
     

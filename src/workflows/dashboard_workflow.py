@@ -218,8 +218,8 @@ class DashboardGenerationWorkflow:
                 state["errors"].append("Target audience is required")
                 return state
             
-            # Validate dataset content
-            dataset = state["dataset_schema"]
+            # Validate dataset content using the analysis schema
+            dataset = state["dataset_schema_analysis"]
             
             if dataset.total_rows == 0:
                 state["errors"].append("Dataset is empty")
@@ -246,6 +246,11 @@ class DashboardGenerationWorkflow:
             
             logger.info(f"[{state['workflow_id']}] Input validation completed successfully")
             
+        except KeyError as e:
+            error_msg = f"Input validation failed: Missing state key {e}"
+            logger.error(f"[{state['workflow_id']}] {error_msg}")
+            logger.error(f"[{state['workflow_id']}] State keys available: {list(state.keys())}")
+            state["errors"].append(error_msg)
         except Exception as e:
             error_msg = f"Input validation failed: {e}"
             logger.error(f"[{state['workflow_id']}] {error_msg}")
@@ -274,11 +279,19 @@ class DashboardGenerationWorkflow:
             state["ai_analysis"] = ai_analysis
             
             logger.info(f"[{state['workflow_id']}] AI analysis completed")
-            logger.debug(f"[{state['workflow_id']}] Generated {len(ai_analysis.recommended_kpis)} KPIs and {len(ai_analysis.recommended_visualizations)} visualizations")
+            logger.info(f"[{state['workflow_id']}] Generated {len(ai_analysis.recommended_kpis)} KPIs and {len(ai_analysis.recommended_visualizations)} visualizations")
+            
+            if ai_analysis.recommended_visualizations:
+                for i, viz in enumerate(ai_analysis.recommended_visualizations):
+                    logger.debug(f"[{state['workflow_id']}] Viz {i+1}: {viz.chart_type} - {viz.title}")
+            else:
+                logger.warning(f"[{state['workflow_id']}] No visualizations in AI analysis response!")
             
         except Exception as e:
             error_msg = f"AI analysis failed: {e}"
             logger.error(f"[{state['workflow_id']}] {error_msg}")
+            import traceback
+            logger.error(f"[{state['workflow_id']}] Traceback: {traceback.format_exc()}")
             state["errors"].append(error_msg)
         
         return state
@@ -318,6 +331,8 @@ class DashboardGenerationWorkflow:
         except Exception as e:
             error_msg = f"Workbook generation failed: {e}"
             logger.error(f"[{state['workflow_id']}] {error_msg}")
+            import traceback
+            logger.error(f"[{state['workflow_id']}] Traceback: {traceback.format_exc()}")
             state["errors"].append(error_msg)
         
         return state
