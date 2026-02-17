@@ -52,7 +52,7 @@ class ApplicationConfig(BaseModel):
     description: str = "AI-powered automatic Tableau dashboard generation"
     debug: bool = False
     log_level: str = "INFO"
-    llm_provider: str = "azure"
+    llm_provider: str = "gemini"
 
 class FileStorageConfig(BaseModel):
     """File storage configuration"""
@@ -225,7 +225,7 @@ class Config:
             description=config.get("description", "AI-powered automatic Tableau dashboard generation"),
             debug=os.getenv("DEBUG", "false").lower() == "true",
             log_level=os.getenv("LOG_LEVEL", "INFO"),
-            llm_provider=os.getenv("LLM_PROVIDER", config.get("llm_provider", "azure"))
+            llm_provider=os.getenv("LLM_PROVIDER", config.get("llm_provider", "gemini"))
         )
     
     def _init_file_storage_config(self) -> FileStorageConfig:
@@ -272,7 +272,7 @@ class Config:
 
     def _init_llm_config(self) -> LLMConfig:
         """Initialize a generic LLM configuration from env/config.yaml."""
-        config = self.config_data.get("llm", {})
+        config = self.config_data.get("llm", {}) or self.config_data.get("gemini", {})
 
         # If the user placed a GEMINI_API_KEY and didn't explicitly set LLM_PROVIDER,
         # prefer Gemini (Google Gemini) as the provider.
@@ -283,12 +283,12 @@ class Config:
         provider = (
             env_provider
             or config.get("provider")
-            or ("gemini" if gemini_env else "azure")
+            or ("gemini" if gemini_env else "gemini")
         )
 
         model_name = os.getenv(
             "LLM_MODEL_NAME",
-            config.get("model_name", os.getenv("AZURE_OPENAI_MODEL_NAME", "gpt-4-turbo")),
+            config.get("model_name", os.getenv("AZURE_OPENAI_MODEL_NAME", "gemini-2.5-flash")),
         )
 
         # Prefer specific env vars if present

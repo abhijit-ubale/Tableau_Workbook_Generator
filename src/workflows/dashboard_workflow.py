@@ -308,7 +308,7 @@ class DashboardGenerationWorkflow:
                 dataset_schema=state["dataset_schema_generation"],
                 ai_analysis=state["ai_analysis"],
                 user_preferences=state["user_preferences"],
-                output_format="twbx",
+                output_format="twb",
                 include_sample_data=True
             )
             

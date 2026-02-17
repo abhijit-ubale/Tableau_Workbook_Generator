@@ -287,45 +287,71 @@ class DataProcessor:
         return col_name
     
     def _optimize_data_types(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Optimize data types for better performance and analysis"""
-        
+        """Optimize data types for better performance and analysis.
+
+        Handles common real-world formatting:
+        - Currency:   $1,234.56  → 1234.56
+        - Percentage: 45.2%      → 45.2
+        - Accounting: (100.0)    → -100.0
+        - Comma-sep:  1,234      → 1234
+        """
+        import re
+
+        def _try_numeric(series: pd.Series):
+            """Return numeric series if ≥80% of non-null values convert, else None."""
+            non_null = series.dropna()
+            if len(non_null) == 0:
+                return None
+            result = pd.to_numeric(non_null, errors="coerce")
+            if result.notna().sum() >= len(non_null) * 0.8:
+                return pd.to_numeric(series, errors="coerce")
+            return None
+
+        def _strip_numeric_formatting(s: pd.Series) -> pd.Series:
+            """Strip currency / percentage / accounting symbols from a string series."""
+            def _clean(v):
+                v = str(v).strip()
+                neg = v.startswith("(") and v.endswith(")")
+                v = re.sub(r"[\$,\s%]", "", v).strip("()")
+                return ("-" + v) if neg else v
+            return s.apply(_clean)
+
         for col in df.columns:
             col_data = df[col]
-            
-            # Skip if all null
+
             if col_data.isnull().all():
                 continue
-            
-            # Try to convert object columns to better types
-            if col_data.dtype == 'object':
-                # Try datetime conversion
+
+            if col_data.dtype == "object":
+                # 1. Try datetime
                 if self._looks_like_datetime(col_data):
                     try:
                         df[col] = pd.to_datetime(col_data, infer_datetime_format=True)
                         logger.debug(f"Converted '{col}' to datetime")
                         continue
-                    except:
+                    except Exception:
                         pass
-                
-                # Try numeric conversion
-                try:
-                    numeric_series = pd.to_numeric(col_data, errors='coerce')
-                    if not numeric_series.isnull().all():
-                        # If most values can be converted to numeric
-                        non_null_original = col_data.dropna()
-                        non_null_numeric = numeric_series.dropna()
-                        if len(non_null_numeric) >= len(non_null_original) * 0.8:
-                            df[col] = numeric_series
-                            logger.debug(f"Converted '{col}' to numeric")
-                            continue
-                except:
-                    pass
-                
-                # Convert to category if low cardinality
+
+                # 2. Try raw numeric (numbers stored as plain strings)
+                converted = _try_numeric(col_data)
+                if converted is not None:
+                    df[col] = converted
+                    logger.debug(f"Converted '{col}' to numeric")
+                    continue
+
+                # 3. Try after stripping currency / percentage / comma formatting
+                stripped = _strip_numeric_formatting(col_data)
+                converted = _try_numeric(stripped)
+                if converted is not None:
+                    df[col] = converted
+                    logger.debug(f"Converted '{col}' to numeric (after symbol stripping)")
+                    continue
+
+                # 4. Low-cardinality → category
                 if col_data.nunique() < 50:
-                    df[col] = col_data.astype('category')
+                    df[col] = col_data.astype("category")
                     logger.debug(f"Converted '{col}' to category")
-        
+
         return df
     
     def _looks_like_datetime(self, series: pd.Series) -> bool:

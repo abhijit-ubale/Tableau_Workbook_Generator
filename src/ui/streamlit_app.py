@@ -91,20 +91,6 @@ class StreamlitApp:
         st.markdown("""
         **AI-Powered Automatic Dashboard Creation** • Upload your data and let AI create compelling Tableau dashboards
         """)
-        
-        # Display configuration status
-        if self.config:
-            with st.expander("ℹ️ Application Status", expanded=False):
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Azure OpenAI", "✅ Connected" if self.config.azure_openai.api_key else "❌ Not Configured")
-                
-                with col2:
-                    st.metric("Version", self.config.application.version)
-                
-                with col3:
-                    st.metric("Debug Mode", "On" if self.config.application.debug else "Off")
     
     def render_sidebar(self):
         """
@@ -127,9 +113,9 @@ class StreamlitApp:
             
             output_format = st.selectbox(
                 "Output Format",
-                ["twbx", "twb"],
+                ["twb", "twbx"],
                 key="output_format_select",
-                help="TWBX includes data, TWB is XML only"
+                help="TWB is XML only (recommended — user already has the data file). TWBX embeds the data inside the workbook."
             )
             
             include_sample_data = st.checkbox(
@@ -613,12 +599,24 @@ class StreamlitApp:
                 if 'business_potential' in insights:
                     st.write("**Business Potential:**")
                     for potential in insights['business_potential']:
-                        st.write(f"• {potential}")
+                        if isinstance(potential, dict):
+                            st.write(f"• {potential.get('insight', str(potential))}")
+                        else:
+                            st.write(f"• {potential}")
                 
                 if 'data_quality_issues' in insights:
                     st.write("**Data Quality Issues:**")
                     for issue in insights['data_quality_issues']:
-                        st.write(f"⚠️ {issue}")
+                        if isinstance(issue, dict):
+                            column = issue.get('column', 'Unknown')
+                            severity = issue.get('severity', '')
+                            desc = issue.get('description', '')
+                            issue_text = f"{column} ({severity})" if severity else column
+                            if desc:
+                                issue_text += f": {desc}"
+                            st.write(f"⚠️ {issue_text}")
+                        else:
+                            st.write(f"⚠️ {issue}")
             else:
                 st.write(str(insights))
         

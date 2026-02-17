@@ -748,6 +748,86 @@ class VisualizationSpec(BaseModel):
     show_labels: bool = Field(True, description="Whether to show data labels")
     show_legend: bool = Field(True, description="Whether to show legend")
     aggregation_type: Optional[Literal["sum", "avg", "count", "min", "max"]] = Field("sum", description="Aggregation method")
+    
+    @validator('chart_type', pre=True)
+    def normalize_chart_type(cls, v):
+        """Normalize chart type values from LLM output."""
+        if isinstance(v, str):
+            # Convert common LLM variations to proper enum values
+            v_lower = v.lower().replace(' ', '_').replace('-', '_')
+            # Handle special cases
+            if 'filled' in v_lower and 'map' in v_lower:
+                return VisualizationType.FILLED_MAP
+            elif 'box' in v_lower and 'plot' in v_lower:
+                return VisualizationType.BOX_PLOT
+            elif 'bubble' in v_lower:
+                return VisualizationType.PACKED_BUBBLES
+            elif 'bullet' in v_lower:
+                return VisualizationType.BULLET_GRAPH
+            # Try direct match
+            try:
+                return VisualizationType[v_lower.upper()]
+            except KeyError:
+                # If no match, return as is and let Pydantic handle the error
+                return v
+        return v
+    
+    @validator('x_axis', pre=True)
+    def normalize_x_axis(cls, v):
+        """Convert string x_axis to list."""
+        if isinstance(v, str):
+            return [v]
+        elif isinstance(v, list):
+            return v
+        return v
+    
+    @validator('y_axis', pre=True)
+    def normalize_y_axis(cls, v):
+        """Convert string y_axis to list."""
+        if isinstance(v, str):
+            return [v]
+        elif isinstance(v, list):
+            return v
+        return v
+    
+    @validator('color_scheme', pre=True)
+    def normalize_color_scheme(cls, v):
+        """Normalize color scheme values from LLM output."""
+        if isinstance(v, str):
+            v_lower = v.lower().replace(' ', '_').replace('-', '_')
+            # Handle special cases
+            if 'orange' in v_lower and 'gold' in v_lower:
+                return ColorScheme.ORANGES
+            elif 'orange_blue' in v_lower or 'orange' in v_lower and 'blue' in v_lower:
+                return ColorScheme.ORANGE_BLUE
+            elif 'red_blue' in v_lower or 'red' in v_lower and 'blue' in v_lower:
+                return ColorScheme.RED_BLUE
+            elif 'green_orange' in v_lower or 'green' in v_lower and 'orange' in v_lower:
+                return ColorScheme.GREEN_ORANGE
+            # Try direct match
+            try:
+                return ColorScheme[v_lower.upper()]
+            except KeyError:
+                # Default to tableau10 if not recognized
+                return ColorScheme.TABLEAU10
+        return v
+    
+    @validator('aggregation_type', pre=True)
+    def normalize_aggregation_type(cls, v):
+        """Normalize aggregation type values from LLM output."""
+        if isinstance(v, str):
+            v_lower = v.lower()
+            valid_values = {'sum', 'avg', 'count', 'min', 'max'}
+            if v_lower in valid_values:
+                return v_lower
+            # Handle common variations
+            if v_lower == 'average':
+                return 'avg'
+            elif v_lower == 'total':
+                return 'sum'
+            # Default to sum if not recognized
+            return 'sum'
+        return v
 
 class WorksheetSpec(BaseModel):
     """
@@ -1516,7 +1596,7 @@ class GenerationRequest(BaseModel):
     dataset_schema: DatasetSchema = Field(..., description="Source dataset schema")
     ai_analysis: AIAnalysisResponse = Field(..., description="AI analysis results")
     user_preferences: Dict[str, Any] = Field(default_factory=dict, description="User-specified preferences")
-    output_format: Literal["twb", "twbx"] = Field("twbx", description="Output file format")
+    output_format: Literal["twb", "twbx"] = Field("twb", description="Output file format")
     include_sample_data: bool = Field(True, description="Whether to include sample data in workbook")
 
 class GenerationResult(BaseModel):

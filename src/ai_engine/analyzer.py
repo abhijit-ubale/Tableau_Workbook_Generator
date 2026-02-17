@@ -6,7 +6,7 @@ Supports advanced Tableau calculations, including table calculations and Level o
 
 import json
 import asyncio
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from datetime import datetime
 
 from typing import Any
@@ -27,6 +27,22 @@ from ..utils.config import Config
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+class BusinessInsight(BaseModel):
+    """Model for a business insight from data analysis."""
+    insight: str = Field(..., description="The business insight")
+
+class DataQualityIssue(BaseModel):
+    """Model for a data quality issue."""
+    column: str = Field(..., description="Column name with the issue")
+    severity: str = Field(..., description="Severity level (Critical, High, Medium, Low)")
+    description: Optional[str] = Field(None, description="Description of the issue")
+
+class PreprocessingStep(BaseModel):
+    """Model for a recommended preprocessing step."""
+    step: str = Field(..., description="The preprocessing step to take")
+    description: Optional[str] = Field(None, description="Description of the preprocessing step")
+    priority: Optional[str] = Field(None, description="Priority level (High, Medium, Low)")
 
 class DataInsights(BaseModel):
     """
@@ -203,15 +219,15 @@ class DataInsights(BaseModel):
         ..., 
         description="Key characteristics of the dataset including row/column counts, data types, and statistical properties"
     )
-    business_potential: List[str] = Field(
+    business_potential: List[Union[str, BusinessInsight]] = Field(
         ..., 
         description="Potential business insights and analytical opportunities identified in the data"
     )
-    data_quality_issues: List[str] = Field(
+    data_quality_issues: List[Union[str, DataQualityIssue]] = Field(
         ..., 
         description="Identified data quality problems that may impact dashboard accuracy and reliability"
     )
-    recommended_preprocessing: List[str] = Field(
+    recommended_preprocessing: List[Union[str, PreprocessingStep]] = Field(
         ..., 
         description="Recommended data preprocessing and cleaning steps to improve data quality before dashboard generation"
     )
@@ -347,11 +363,18 @@ class TableauDashboardAnalyzer:
             4. Consider data quality and preprocessing needs
             5. Provide actionable recommendations
             
-            Response must be a valid JSON object with these keys:
-            - data_characteristics: Object with key dataset properties
-            - business_potential: Array of potential business insights
-            - data_quality_issues: Array of identified issues
-            - recommended_preprocessing: Array of preprocessing suggestions
+            Response format - MUST be VALID JSON:
+            {{
+              "data_characteristics": {{"total_rows": number, "total_columns": number, "key_insight": "string"}},
+              "business_potential": ["insight 1", "insight 2", "insight 3"],
+              "data_quality_issues": ["issue 1", "issue 2", "issue 3"],
+              "recommended_preprocessing": ["step 1", "step 2", "step 3"]
+            }}
+            
+            - Ensure arrays contain only strings
+            - Ensure data_characteristics is an object with key properties
+            - Always return valid JSON without markdown wrapping
+            - Do NOT include code blocks or ``` markers
             """
         )
         
@@ -449,21 +472,23 @@ class TableauDashboardAnalyzer:
             3. Recommend color schemes and visual hierarchy
             4. Focus on performance and usability
             5. Provide reasoning for all recommendations
+            6. Return ONLY valid JSON without markdown wrapping
+            7. Do NOT include code blocks or ``` markers
             
-            Response format (JSON):
-            {
-              "layout_recommendation": {
+            Response format - MUST be VALID JSON:
+            {{
+              "layout_recommendation": {{
                 "confidence_score": 0.85,
                 "reasoning": "Explanation of layout choice",
                 "alternatives": ["Alternative 1", "Alternative 2"]
-              },
-              "color_scheme_recommendation": {
+              }},
+              "color_scheme_recommendation": {{
                 "confidence_score": 0.90,
                 "reasoning": "Color scheme rationale", 
                 "alternatives": ["tableau20", "category10"]
-              },
+              }},
               "performance_considerations": ["Consideration 1", "Consideration 2"]
-            }
+            }}
             """
         )
         
@@ -520,17 +545,19 @@ class TableauDashboardAnalyzer:
             3. Prioritize KPIs by business importance
             4. Include proper formatting specifications
             5. Ensure calculations are syntactically correct for Tableau
+            6. Return ONLY valid JSON without markdown wrapping
+            7. Do NOT include code blocks or ``` markers
             
-            Response format (JSON Array):
+            Response format - MUST be VALID JSON Array:
             [
-              {
+              {{
                 "name": "KPI Name",
                 "description": "KPI Description",
                 "calculation": "Tableau calculation formula",
                 "target_value": 100.0,
                 "format_string": "#,##0.0%",
                 "priority": 1
-              }
+              }}
             ]
             """
         )
@@ -544,7 +571,7 @@ class TableauDashboardAnalyzer:
             Business Goals: {business_goals}
             
             Create 3-7 relevant KPIs with proper Tableau calculations.
-            Respond with ONLY JSON array with fields: name, description, calculation, format_string, priority.
+            Respond with ONLY JSON array - no markdown, no code blocks. Fields: name, description, calculation, format_string, priority.
             """
         )
         
@@ -599,6 +626,10 @@ class TableauDashboardAnalyzer:
             4. Optimize for user understanding and insight discovery
             5. Ensure visualizations work well together in a dashboard
             6. Return ONLY valid JSON array, no markdown
+            7. Use lowercase enum values: chart_type must be bar, line, area, scatter, pie, histogram, heatmap, treemap, map, filled_map, gantt, packed_bubbles, box_plot, bullet_graph
+            8. aggregation_type must be: sum, avg, count, min, or max
+            9. color_scheme must be: tableau10, tableau20, category10, blues, oranges, greens, red_blue, orange_blue, green_orange
+            10. x_axis and y_axis must be arrays of strings, not single strings
             """
         )
         
@@ -611,7 +642,13 @@ class TableauDashboardAnalyzer:
             Data Insights: {data_insights}
             KPIs: {kpis}
             
-            Create 4-8 complementary visualizations that tell a cohesive story.
+            CRITICAL REQUIREMENTS:
+            1. x_axis and y_axis MUST use ONLY columns from the dataset schema above
+            2. Do NOT use calculated fields, KPI names, or derived fields
+            3. Do NOT reference fields like 'Total Sales' or 'Total Profit' unless they exist in schema
+            4. Map to real column names from the provided schema
+            5. Create 4-8 complementary visualizations that tell a cohesive story
+            
             Respond with ONLY JSON array format with fields: chart_type, title, x_axis, y_axis, color_field, aggregation_type, color_scheme.
             """
         )
@@ -625,10 +662,34 @@ class TableauDashboardAnalyzer:
                     elif cleaned.startswith("```"):
                         cleaned = cleaned[3:-3]
                     data = json.loads(cleaned)
-                    return data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+                    if isinstance(data, list):
+                        # Normalize each visualization item
+                        return [self._normalize_viz(viz) for viz in data]
+                    elif isinstance(data, dict):
+                        return [self._normalize_viz(data)]
+                    else:
+                        return []
                 except Exception as e:
                     logger.warning(f"Visualization parsing failed: {e}. Returning fallback.")
                     return []
+            
+            def _normalize_viz(self, viz: dict) -> dict:
+                """Normalize visualization data from LLM output."""
+                if not isinstance(viz, dict):
+                    return {}
+                
+                # Ensure x_axis and y_axis are lists
+                if 'x_axis' in viz and isinstance(viz['x_axis'], str):
+                    viz['x_axis'] = [viz['x_axis']]
+                elif 'x_axis' not in viz:
+                    viz['x_axis'] = []
+                    
+                if 'y_axis' in viz and isinstance(viz['y_axis'], str):
+                    viz['y_axis'] = [viz['y_axis']]
+                elif 'y_axis' not in viz:
+                    viz['y_axis'] = []
+                
+                return viz
         
         return ChatPromptTemplate.from_messages([system_prompt, human_prompt]) | self.llm | VisualizationResponseParser()
     
@@ -1026,10 +1087,15 @@ class TableauDashboardAnalyzer:
         filled_map, gantt, packed_bubble, box_plot, bullet_graph
         """
         try:
+            # Get list of available column names for reference
+            available_columns = [col.name for col in schema.columns]
+            logger.info(f"Available columns for visualization: {available_columns}")
+            
             result = await self.visualization_recommender_chain.ainvoke({
                 "dataset_schema": json.dumps({
                     "columns": [col.dict() for col in schema.columns],
-                    "total_rows": schema.total_rows
+                    "total_rows": schema.total_rows,
+                    "available_column_names": available_columns
                 }, indent=2),
                 "business_goals": ", ".join(business_goals),
                 "data_insights": json.dumps(data_insights.dict(), indent=2),
@@ -1039,7 +1105,23 @@ class TableauDashboardAnalyzer:
             # result is already a list from the VisualizationResponseParser
             viz_data = result if isinstance(result, list) else json.loads(result.content if hasattr(result, 'content') else result)
             if viz_data:
-                return [VisualizationSpec(**viz) for viz in viz_data]
+                visualizations = [VisualizationSpec(**viz) for viz in viz_data]
+                # Validate visualizations have fields
+                validated = []
+                for viz in visualizations:
+                    # Check if x_axis or y_axis are empty/null
+                    if (not viz.x_axis or len(viz.x_axis) == 0) and (not viz.y_axis or len(viz.y_axis) == 0):
+                        logger.warning(f"Visualization '{viz.title}' has no x_axis or y_axis, falling back to defaults")
+                        # Skip this one, will be replaced by defaults
+                        continue
+                    validated.append(viz)
+                
+                if validated:
+                    logger.info(f"Using {len(validated)} visualizations from LLM, {len(visualizations) - len(validated)} invalid")
+                    return validated
+                else:
+                    logger.warning("All visualizations from chain were invalid (no axes), using defaults")
+                    return self._generate_default_visualizations(schema)
             else:
                 logger.warning("Visualization chain returned empty list, using defaults")
                 return self._generate_default_visualizations(schema)
@@ -1084,83 +1166,88 @@ class TableauDashboardAnalyzer:
         numeric_cols = [col for col in schema.columns if col.data_type in [DataType.INTEGER, DataType.FLOAT]]
         categorical_cols = [col for col in schema.columns if col.data_type == DataType.CATEGORICAL]
         
+        logger.info(f"Generating default visualizations:")
+        logger.info(f"  Numeric columns: {[col.name for col in numeric_cols]}")
+        logger.info(f"  Categorical columns: {[col.name for col in categorical_cols]}")
+        
         # Bar chart - numeric by categorical
         if numeric_cols and categorical_cols:
-            visualizations.append(
-                VisualizationSpec(
-                    chart_type=VisualizationType.BAR,
-                    title=f"{numeric_cols[0].name} by {categorical_cols[0].name}",
-                    x_axis=[categorical_cols[0].name],
-                    y_axis=[numeric_cols[0].name],
-                    aggregation_type="sum",
-                    color_scheme="tableau10"
-                )
+            viz = VisualizationSpec(
+                chart_type=VisualizationType.BAR,
+                title=f"{numeric_cols[0].name} by {categorical_cols[0].name}",
+                x_axis=[categorical_cols[0].name],
+                y_axis=[numeric_cols[0].name],
+                aggregation_type="sum",
+                color_scheme="tableau10"
             )
+            visualizations.append(viz)
+            logger.info(f"  ✓ Bar chart: {viz.x_axis} vs {viz.y_axis}")
         
         # Scatter plot - numeric vs numeric
         if len(numeric_cols) >= 2:
-            visualizations.append(
-                VisualizationSpec(
-                    chart_type=VisualizationType.SCATTER,
-                    title=f"{numeric_cols[0].name} vs {numeric_cols[1].name}",
-                    x_axis=[numeric_cols[0].name],
-                    y_axis=[numeric_cols[1].name],
-                    aggregation_type="avg",
-                    color_scheme="tableau10"
-                )
+            viz = VisualizationSpec(
+                chart_type=VisualizationType.SCATTER,
+                title=f"{numeric_cols[0].name} vs {numeric_cols[1].name}",
+                x_axis=[numeric_cols[0].name],
+                y_axis=[numeric_cols[1].name],
+                aggregation_type="avg",
+                color_scheme="tableau10"
             )
+            visualizations.append(viz)
+            logger.info(f"  ✓ Scatter plot: {viz.x_axis} vs {viz.y_axis}")
         
         # Line chart - trends over first numeric column
         if len(numeric_cols) >= 1:
-            visualizations.append(
-                VisualizationSpec(
-                    chart_type=VisualizationType.LINE,
-                    title=f"Trend of {numeric_cols[0].name}",
-                    x_axis=[numeric_cols[0].name] if len(numeric_cols) > 1 else ["Record Number"],
-                    y_axis=[numeric_cols[0].name],
-                    aggregation_type="sum",
-                    color_scheme="tableau10"
-                )
+            viz = VisualizationSpec(
+                chart_type=VisualizationType.LINE,
+                title=f"Trend of {numeric_cols[0].name}",
+                x_axis=[numeric_cols[0].name] if len(numeric_cols) > 1 else ["Index"],
+                y_axis=[numeric_cols[0].name],
+                aggregation_type="sum",
+                color_scheme="tableau10"
             )
+            visualizations.append(viz)
+            logger.info(f"  ✓ Line chart: {viz.x_axis} vs {viz.y_axis}")
         
         # Pie chart - distribution by first categorical
         if len(categorical_cols) >= 1 and len(numeric_cols) >= 1:
-            visualizations.append(
-                VisualizationSpec(
-                    chart_type=VisualizationType.PIE,
-                    title=f"Distribution of {categorical_cols[0].name}",
-                    x_axis=[categorical_cols[0].name],
-                    y_axis=[numeric_cols[0].name],
-                    aggregation_type="count",
-                    color_scheme="tableau10"
-                )
+            viz = VisualizationSpec(
+                chart_type=VisualizationType.PIE,
+                title=f"Distribution of {categorical_cols[0].name}",
+                x_axis=[categorical_cols[0].name],
+                y_axis=[numeric_cols[0].name],
+                aggregation_type="count",
+                color_scheme="tableau10"
             )
+            visualizations.append(viz)
+            logger.info(f"  ✓ Pie chart: {viz.x_axis} vs {viz.y_axis}")
         
         # If only one type exists, create a basic table-like view
         if not visualizations:
             if numeric_cols:
-                visualizations.append(
-                    VisualizationSpec(
-                        chart_type=VisualizationType.BAR,
-                        title=f"Summary of {numeric_cols[0].name}",
-                        x_axis=["Record Number"],
-                        y_axis=[numeric_cols[0].name],
-                        aggregation_type="sum",
-                        color_scheme="tableau10"
-                    )
+                viz = VisualizationSpec(
+                    chart_type=VisualizationType.BAR,
+                    title=f"Summary of {numeric_cols[0].name}",
+                    x_axis=["Index"],
+                    y_axis=[numeric_cols[0].name],
+                    aggregation_type="sum",
+                    color_scheme="tableau10"
                 )
+                visualizations.append(viz)
+                logger.info(f"  ✓ Summary bar chart: {viz.x_axis} vs {viz.y_axis}")
             elif categorical_cols:
-                visualizations.append(
-                    VisualizationSpec(
-                        chart_type=VisualizationType.BAR,
-                        title=f"Count by {categorical_cols[0].name}",
-                        x_axis=[categorical_cols[0].name],
-                        y_axis=["COUNT(*)"],
-                        aggregation_type="count",
-                        color_scheme="tableau10"
-                    )
+                viz = VisualizationSpec(
+                    chart_type=VisualizationType.BAR,
+                    title=f"Count by {categorical_cols[0].name}",
+                    x_axis=[categorical_cols[0].name],
+                    y_axis=["Count"],
+                    aggregation_type="count",
+                    color_scheme="tableau10"
                 )
+                visualizations.append(viz)
+                logger.info(f"  ✓ Count bar chart: {viz.x_axis} vs {viz.y_axis}")
         
+        logger.info(f"Generated {len(visualizations)} default visualizations")
         return visualizations
     
     def _parse_design_recommendations(self, design_rec_str):
@@ -1196,7 +1283,23 @@ class TableauDashboardAnalyzer:
         - alternatives: List of alternative options
         """
         try:
-            data = json.loads(design_rec_str)
+            # Handle empty or whitespace-only strings
+            if not design_rec_str or not design_rec_str.strip():
+                logger.warning("Empty design recommendations string, using defaults")
+                return (
+                    AIRecommendation(confidence_score=0.5, reasoning="Default recommendation", alternatives=[]),
+                    AIRecommendation(confidence_score=0.7, reasoning="Default color scheme", alternatives=[]),
+                    ["Use appropriate aggregation", "Limit data points"]
+                )
+            
+            # Try to extract JSON from markdown
+            cleaned = design_rec_str.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:-3]
+            elif cleaned.startswith("```"):
+                cleaned = cleaned[3:-3]
+            
+            data = json.loads(cleaned)
             
             layout_rec = AIRecommendation(
                 confidence_score=data.get("layout_recommendation", {}).get("confidence_score", 0.5),
@@ -1210,7 +1313,18 @@ class TableauDashboardAnalyzer:
                 alternatives=data.get("color_scheme_recommendation", {}).get("alternatives", [])
             )
             
-            performance_considerations = data.get("performance_considerations", [])
+            raw_perf = data.get("performance_considerations", [])
+            # LLM sometimes returns list-of-dicts instead of list-of-strings.
+            # Normalise: extract first string value found in each item.
+            performance_considerations = []
+            for item in raw_perf:
+                if isinstance(item, str):
+                    performance_considerations.append(item)
+                elif isinstance(item, dict):
+                    # Take the first string value in the dict (e.g. {'recommendation': '...'})
+                    text = next((v for v in item.values() if isinstance(v, str)), None)
+                    if text:
+                        performance_considerations.append(text)
             
             return layout_rec, color_rec, performance_considerations
             

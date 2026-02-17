@@ -213,6 +213,14 @@ class TableauWorkbookGenerator:
         try:
             logger.info(f"Starting workbook generation for dataset: {request.dataset_schema.name}")
             
+            # Log available columns in the datasource
+            available_columns = [col.name for col in request.dataset_schema.columns]
+            logger.info(f"Available datasource columns: {available_columns}")
+            
+            # Store for use in worksheet generation
+            self._available_columns = available_columns
+            self._dataset_schema = request.dataset_schema  # Store full schema for field type lookups
+            
             # Create workbook specification
             workbook_spec = self._create_workbook_specification(request)
             
@@ -421,18 +429,15 @@ class TableauWorkbookGenerator:
         _create_dashboard_element : Dashboard XML generation
         """
         # Create root workbook element
+        # version="18.1" is Tableau's internal schema version (not the product version).
+        # source-build stores the product version string for compatibility display.
         workbook = Element("workbook")
-        workbook.set("version", self.tableau_version)
-        workbook.set("build-version", self.build_version)
-        workbook.set("source-build", self.build_version)
-        
-        # Add document preferences
+        workbook.set("source-build", "2023.3.0.0")
+        workbook.set("source-platform", "win")
+        workbook.set("version", "18.1")
+
+        # Add document preferences (empty but required)
         preferences = SubElement(workbook, "preferences")
-        
-        # Add repository location (for local files)
-        repository = SubElement(workbook, "repository-location")
-        repository.set("id", "TWB Repository")
-        repository.set("path", f"{workbook_spec.name}.twb")
         
         # Add datasources
         datasources = SubElement(workbook, "datasources")
@@ -537,64 +542,76 @@ class TableauWorkbookGenerator:
         _add_calculated_field_metadata : Add calculated field metadata
         _get_tableau_data_type : Data type conversion
         """
+        ds_id = self._generate_id()
+        ds_name = f"textscan.{ds_id}"
+        self._datasource_name = ds_name  # Store for worksheet field dependency references
+
         datasource = SubElement(parent, "datasource")
         datasource.set("caption", dataset_schema.name)
-        datasource.set("name", f"federated.{self._generate_id()}")
+        datasource.set("hasconnection", "true")
+        datasource.set("name", ds_name)
         datasource.set("version", "18.1")
-        
-        # Add connection
+
+        # ── Simple textscan connection (single CSV) ──────────────────────────
         connection = SubElement(datasource, "connection")
-        connection.set("class", "federated")
-        
-        # Add named connections
-        named_connections = SubElement(connection, "named-connections")
-        named_connection = SubElement(named_connections, "named-connection")
-        named_connection.set("caption", dataset_schema.name)
-        named_connection.set("name", "textscan")
-        
-        # Add actual connection details
-        # For TWBX files, data will be embedded, so use relative path within package
-        inner_connection = SubElement(named_connection, "connection")
-        inner_connection.set("class", "textscan")
-        inner_connection.set("directory", "Data")  # Relative path within TWBX
-        inner_connection.set("filename", f"{dataset_schema.name}.csv")
-        inner_connection.set("password", "")
-        inner_connection.set("server", "")
-        
-        # Add relation (table structure)
+        connection.set("class", "textscan")
+        connection.set("directory", "Data")   # Relative path inside TWBX
+        connection.set("filename", f"{dataset_schema.name}.csv")
+        connection.set("password", "")
+        connection.set("server", "")
+
+        # Relation defining the CSV table
         relation = SubElement(connection, "relation")
-        relation.set("connection", "textscan")
         relation.set("name", f"{dataset_schema.name}.csv")
         relation.set("table", f"[{dataset_schema.name}.csv]")
         relation.set("type", "table")
-        
-        # Add column metadata
-        metadata_records = SubElement(datasource, "metadata-records")
+
+        # Metadata records live inside connection for textscan
+        metadata_records = SubElement(connection, "metadata-records")
         for i, column in enumerate(dataset_schema.columns):
-            self._add_column_metadata(metadata_records, column, i)        
+            self._add_column_metadata(metadata_records, column, i)
 
         if hasattr(dataset_schema, "calculated_fields") and dataset_schema.calculated_fields:
             for j, calc_field in enumerate(dataset_schema.calculated_fields):
-                self._add_calculated_field_metadata(metadata_records, calc_field, len(dataset_schema.columns) + j)
+                self._add_calculated_field_metadata(
+                    metadata_records, calc_field, len(dataset_schema.columns) + j
+                )
 
-        # Add column instances
-        column_instances = SubElement(datasource, "column-instances")
+        # ── Column definitions (REQUIRED — direct children of datasource) ────
+        # Without these <column> elements Tableau cannot resolve field references
+        # in worksheets, causing every sheet to appear empty.
         for column in dataset_schema.columns:
-            column_instance = SubElement(column_instances, "column-instance")
-            column_instance.set("column", f"[{column.name}]")
-            column_instance.set("derivation", "None")
-            column_instance.set("name", f"[{column.name}]")
-            column_instance.set("pivot", "key")
-            column_instance.set("type", "nominal" if column.recommended_role == "dimension" else "quantitative")
-        
+            role = column.recommended_role or self._infer_role(column.data_type)
+            col_elem = SubElement(datasource, "column")
+            col_elem.set("caption", column.name)
+            col_elem.set("datatype", self._get_tableau_data_type(column.data_type))
+            col_elem.set("name", f"[{column.name}]")
+            col_elem.set("role", role)
+            col_elem.set("type", "nominal" if role == "dimension" else "quantitative")
+
+        # Calculated-field column definitions
         if hasattr(dataset_schema, "calculated_fields") and dataset_schema.calculated_fields:
             for calc_field in dataset_schema.calculated_fields:
-                column_instance = SubElement(column_instances, "column-instance")
-                column_instance.set("column", f"[{calc_field.name}]")
-                column_instance.set("derivation", "Calculation")
-                column_instance.set("name", f"[{calc_field.name}]")
-                column_instance.set("pivot", "key")
-                column_instance.set("type", "nominal" if calc_field.role == "dimension" else "quantitative")
+                role = calc_field.role or "measure"
+                # Auto-correct datatype: calculated fields with arithmetic ops
+                # (SUM, AVG, division, subtraction) should be "real", not "string".
+                raw_dtype = self._get_tableau_data_type(calc_field.data_type)
+                if raw_dtype == "string" and role == "measure":
+                    formula_upper = (calc_field.formula or "").upper()
+                    numeric_indicators = ("SUM(", "AVG(", "COUNT(", "MAX(", "MIN(",
+                                          "FLOAT(", "/", "*", " - ", " + ")
+                    if any(ind in formula_upper for ind in numeric_indicators):
+                        raw_dtype = "real"
+                col_elem = SubElement(datasource, "column")
+                col_elem.set("caption", calc_field.name)
+                col_elem.set("datatype", raw_dtype)
+                col_elem.set("name", f"[{calc_field.name}]")
+                col_elem.set("role", role)
+                col_elem.set("type", "nominal" if role == "dimension" else "quantitative")
+                # Embed the formula so Tableau recognises it as a calculated field
+                calc_elem = SubElement(col_elem, "calculation")
+                calc_elem.set("class", "tableau")
+                calc_elem.set("formula", calc_field.formula)
 
         return datasource
     
@@ -797,6 +814,18 @@ class TableauWorkbookGenerator:
         contains_null = SubElement(metadata, "contains-null")
         contains_null.text = "false"
 
+        # Auto-correct datatype for numeric calculated fields
+        stored_dtype = self._get_tableau_data_type(calc_field.data_type)
+        if stored_dtype == "string" and (calc_field.role or "measure") == "measure":
+            formula_upper = (calc_field.formula or "").upper()
+            numeric_indicators = ("SUM(", "AVG(", "COUNT(", "MAX(", "MIN(",
+                                  "FLOAT(", "/", "*", " - ", " + ")
+            if any(ind in formula_upper for ind in numeric_indicators):
+                # Patch the local-type and remote-type to "real"
+                for child in metadata:
+                    if child.tag in ("local-type", "remote-type"):
+                        child.text = "real"
+
         # Calculation element
         calculation = SubElement(metadata, "calculation")
         calculation.set("formula", calc_field.formula)
@@ -888,238 +917,227 @@ class TableauWorkbookGenerator:
     def _create_worksheet_element(self, parent: Element, worksheet_spec: WorksheetSpec, datasource: Element):
         """
         Create worksheet XML element representing one visualization.
-        
-        Generates complete worksheet definition including table structure, view configuration,
-        datasource reference, and visualization-specific settings (marks, encodings, etc.).
-        
-        Parameters
-        ----------
-        parent : Element
-            Parent <worksheets> element to attach worksheet to
-        worksheet_spec : WorksheetSpec
-            Worksheet specification with visualization and metadata
-        datasource : Element
-            Reference datasource XML element
-        
-        XML Structure Created
-        --------------------
-        <worksheet name="Sheet 1">
-          <table name="Sheet 1" show-empty="true">
-            <view>
-              <datasources>
-                <datasource caption="..." name="..."/>
-              </datasources>
-              <!-- Visualization-specific encodings -->
-              <mark class="bar"/>
-              <encodings>
-                <columns>[Field1]</columns>
-                <rows>[Field2]</rows>
-                ...
-              </encodings>
-            </view>
-          </table>
-          <layout-options>
-            <title>
-              <formatted-text>
-                <run>Sheet Title</run>
-              </formatted-text>
-            </title>
-          </layout-options>
-        </worksheet>
-        
-        Notes
-        -----
-        Worksheet Components:
-        
-        1. Structure:
-           - Wrapper <worksheet> with unique name
-           - <table> element for the worksheet table
-           - <view> element with visualization definition
-        
-        2. Datasource Reference:
-           - Links to datasource element via caption/name
-           - Same for all worksheets in workbook
-           - Enables cross-worksheet data sharing
-        
-        3. Visualization Elements:
-           - Added by _add_visualization_elements()
-           - Includes marks, encodings, aggregations
-           - Chart type determined from VisualizationSpec
-        
-        4. Styling:
-           - Added by _add_worksheet_style()
-           - Includes title and display options
-           - Layout configuration
-        
-        Datasource Linking:
-        - Worksheet must reference valid datasource
-        - Datasource attributes: caption, name
-        - Caption is user-friendly display name
-        - Name is internal identifier (usually "federated.<id>")
-        
-        Unique Naming:
-        - Each worksheet must have unique name
-        - Prevents conflicts in dashboard layout
-        - Currently "Sheet 1", "Sheet 2", etc.
-        
-        Performance:
-        - Worksheet generation scales linearly with fields
-        - Most time spent in encoding generation
-        - Simple worksheets: < 50ms
-        
-        See Also
-        --------
-        _add_visualization_elements : Add visualization specifics
-        _add_worksheet_style : Add styling and titles
-        _create_datasource_element : Datasource definition
+
+        Correct Tableau TWB XML structure (verified against real workbooks):
+
+            <worksheet name="Sheet 1">
+              <table>
+                <view>
+                  <datasources>
+                    <datasource caption="..." name="textscan.XXX"/>
+                  </datasources>
+                  <datasource-dependencies datasource="textscan.XXX">
+                    <column datatype="string" name="[Region]" role="dimension" type="nominal"/>
+                    <column datatype="real"   name="[Sales]"  role="measure"   type="quantitative"/>
+                  </datasource-dependencies>
+                  <aggregation value="true"/>
+                  <panes>
+                    <pane>
+                      <mark class="Bar"/>
+                    </pane>
+                  </panes>
+                </view>
+                <rows>SUM([Sales])</rows>   ← child of <table>, NOT <view>
+                <cols>[Region]</cols>        ← child of <table>, NOT <view>
+              </table>
+              <layout-options>
+                <title><formatted-text><run>Title</run></formatted-text></title>
+              </layout-options>
+            </worksheet>
         """
         worksheet = SubElement(parent, "worksheet")
         worksheet.set("name", worksheet_spec.name)
-        
-        # Add table element
+
+        # ── layout-options MUST come before <table> ──────────────────────────
+        # <worksheet> content model = (layout-options?, table)
+        layout_options = SubElement(worksheet, "layout-options")
+        title_elem = SubElement(layout_options, "title")
+        formatted_text = SubElement(title_elem, "formatted-text")
+        run_elem = SubElement(formatted_text, "run")
+        run_elem.text = worksheet_spec.visualization.title
+
+        # <table> — no name attribute in Tableau XML
         table = SubElement(worksheet, "table")
-        table.set("name", worksheet_spec.name)
-        table.set("show-empty", "true")
-        
-        # Add view element
+
         view = SubElement(table, "view")
-        
-        # Add datasources reference
-        datasources = SubElement(view, "datasources")
-        datasource_ref = SubElement(datasources, "datasource")
-        datasource_ref.set("caption", datasource.get("caption"))
-        datasource_ref.set("name", datasource.get("name"))
-        
-        # Add visualization-specific elements
-        self._add_visualization_elements(view, worksheet_spec.visualization, datasource)
-        
-        # Add style elements
-        self._add_worksheet_style(worksheet, worksheet_spec)
-    
-    def _add_visualization_elements(self, view: Element, viz_spec: VisualizationSpec, datasource: Element):
-        """
-        Add visualization-specific XML elements (marks, encodings, aggregations).
-        
-        Configures the visualization structure including mark type, field encodings
-        (rows, columns, color, size), and aggregation specifications. This transforms
-        a VisualizationSpec into Tableau XML representation.
-        
-        Parameters
-        ----------
-        view : Element
-            Parent <view> XML element to add visualization to
-        viz_spec : VisualizationSpec
-            Visualization specification with chart type and field mappings
-        datasource : Element
-            Reference datasource for field resolution
-        
-        Elements Created
-        ----------------
-        - <mark class="bar|line|circle|..."/> : Mark type
-        - <aggregation value="true"/> : Enable aggregation
-        - <panes> : Pane container for marks and encodings
-        - <encodings> : Field shelf assignments
-        
-        Encodings Added
-        ---------------
-        - columns : X-axis or column shelf fields
-        - rows : Y-axis or row shelf fields
-        - color : Color encoding field (usually categorical)
-        - size : Size encoding field (usually numeric)
-        
-        Aggregation
-        -----------
-        - Always enabled (value="true")
-        - Specific aggregations set per field (sum, avg, count)
-        - Default determined by field role (measure vs dimension)
-        
-        Notes
-        -----
-        Mark Types:
-        - BAR → "Bar": Rectangular marks for categorical comparison
-        - LINE → "Line": Path marks for trend visualization
-        - AREA → "Area": Filled area under lines
-        - SCATTER → "Circle": Point marks for relationships
-        - PIE → "Pie": Pie chart
-        - HEATMAP → "Square": Rectangular grid heatmap
-        - TREEMAP → "Square": Hierarchical treemap
-        - MAP → "Map": Geographic visualization
-        - Default "Automatic": Let Tableau choose
-        
-        Encoding Process:
-        1. Add mark element with appropriate type
-        2. Create panes for layout structure
-        3. For each field in y_axis: add rows encoding
-        4. For each field in x_axis: add columns encoding
-        5. Add color encoding if color_field specified
-        6. Add size encoding if size_field specified
-        
-        Aggregation Defaults:
-        - Numeric measures: sum (revenue, quantity, etc.)
-        - Dimensional fields: no aggregation
-        - Overridable per field via viz_spec.aggregation_type
-        
-        Field Resolution:
-        - Field names must match datasource columns
-        - Bracket notation: [FieldName]
-        - Case-sensitive matching
-        
-        Visual Encoding Best Practices:
-        - Position (x/y): Most important data
-        - Color: Categorical grouping or diverging scale
-        - Size: Secondary numeric encoding
-        - Filters: Reduce data before rendering
-        
-        Performance Impact:
-        - More encodings = more complex query
-        - Simple marks (bar, line) render fast
-        - Complex encodings may impact performance
-        - Aggregation helps with large datasets
-        
-        See Also
-        --------
-        _add_encoding : Add individual encoding
-        _get_tableau_mark_type : Mark type conversion
-        VisualizationSpec : Input specification
-        """
-        
-        # Add aggregation
-        aggregation = SubElement(view, "aggregation")
-        aggregation.set("value", "true")
-        
-        # Add panes
-        panes = SubElement(view, "panes")
-        pane = SubElement(panes, "pane")
-        pane.set("selection-relaxation-option", "selection-relaxation-allow")
-        
-        # Add view name
-        view_name = SubElement(pane, "view")
-        view_name.set("name", viz_spec.title)
-        
-        # Add mark elements based on chart type
-        mark = SubElement(pane, "mark")
-        mark.set("class", self._get_tableau_mark_type(viz_spec.chart_type))
-        
-        # Add encodings
-        encodings = SubElement(pane, "encodings")
-        
-        # Add rows encoding
-        if viz_spec.y_axis:
-            for field in viz_spec.y_axis:
-                self._add_encoding(encodings, "rows", field, datasource, viz_spec.aggregation_type)
-        
-        # Add columns encoding  
-        if viz_spec.x_axis:
-            for field in viz_spec.x_axis:
-                self._add_encoding(encodings, "columns", field, datasource, "none")
-        
-        # Add color encoding
+
+        # ── Datasource reference inside <view> ───────────────────────────────
+        datasources_ref = SubElement(view, "datasources")
+        ds_ref = SubElement(datasources_ref, "datasource")
+        ds_ref.set("caption", datasource.get("caption", ""))
+        ds_ref.set("name", datasource.get("name", ""))
+
+        viz_spec = worksheet_spec.visualization
+        datasource_name = datasource.get("name", "")
+        available_cols = getattr(self, "_available_columns", [])
+
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Building Worksheet: {worksheet_spec.name}")
+        logger.info(f"{'='*60}")
+        logger.info(f"Chart Type:    {viz_spec.chart_type}")
+        logger.info(f"Title:         {getattr(viz_spec, 'title', 'N/A')}")
+        logger.info(f"X-Axis(cols):  {viz_spec.x_axis}")
+        logger.info(f"Y-Axis(rows):  {viz_spec.y_axis}")
+        logger.info(f"Aggregation:   {viz_spec.aggregation_type}")
+        logger.info(f"DS name:       {datasource_name}")
+        logger.info(f"Schema cols:   {available_cols}")
+
+        def resolve_field(raw: str) -> str | None:
+            """
+            Return the exact column name as it appears in the schema,
+            or None if no match. Strips brackets and is case-insensitive.
+            """
+            if not raw:
+                return None
+            cleaned = raw.strip("[]").strip()
+            if not cleaned:
+                return None
+            cleaned_lower = cleaned.lower()
+            # Exact match first
+            for col in available_cols:
+                if col.lower() == cleaned_lower:
+                    return col          # return canonical name from schema
+            # Partial / substring match as last resort
+            for col in available_cols:
+                if cleaned_lower in col.lower() or col.lower() in cleaned_lower:
+                    logger.warning(f"  ~ Fuzzy match: '{cleaned}' → '{col}'")
+                    return col
+            return None
+
+        # ── Collect canonical field names ────────────────────────────────────
+        all_x_fields: list[str] = []
+        all_y_fields: list[str] = []
+
+        for field in (viz_spec.x_axis or []):
+            resolved = resolve_field(str(field))
+            if resolved:
+                all_x_fields.append(resolved)
+                logger.info(f"  ✓ Cols: {resolved}")
+            else:
+                logger.warning(f"  ⚠ Cols field '{field}' not found in schema — skipping")
+
+        for field in (viz_spec.y_axis or []):
+            resolved = resolve_field(str(field))
+            if resolved:
+                all_y_fields.append(resolved)
+                logger.info(f"  ✓ Rows: {resolved}")
+            else:
+                logger.warning(f"  ⚠ Rows field '{field}' not found in schema — skipping")
+
+        if not all_x_fields and not all_y_fields:
+            logger.error("  ✗✗✗ CRITICAL: Zero valid fields — worksheet will be empty!")
+        else:
+            logger.info(f"  ✓✓✓ Total valid fields: {len(all_x_fields)+len(all_y_fields)}")
+        logger.info(f"{'='*60}\n")
+
+        # ── datasource-dependencies inside <view> ────────────────────────────
+        ds_deps = SubElement(view, "datasource-dependencies")
+        ds_deps.set("datasource", datasource_name)
+        seen_deps: set[str] = set()
+
+        for field_name in all_x_fields + all_y_fields:
+            if field_name in seen_deps:
+                continue
+            seen_deps.add(field_name)
+            fspec = self._get_column_spec(field_name)
+            role = (fspec.recommended_role if fspec else None) or self._infer_role(
+                fspec.data_type if fspec else None
+            )
+            dtype = self._get_tableau_data_type(fspec.data_type) if fspec else "string"
+            dep_col = SubElement(ds_deps, "column")
+            dep_col.set("datatype", dtype)
+            dep_col.set("name", f"[{field_name}]")
+            dep_col.set("role", role)
+            dep_col.set("type", "nominal" if role == "dimension" else "quantitative")
+
+        # ── Aggregation inside <view> ────────────────────────────────────────
+        agg_type = (viz_spec.aggregation_type or "sum").lower()
+        use_agg = agg_type not in ("none", "")
+        agg_func = agg_type.upper() if use_agg else "SUM"
+
+        agg_elem = SubElement(view, "aggregation")
+        agg_elem.set("value", "true" if use_agg else "false")
+
+        # <view> ends here. <panes> belongs in <table> AFTER <view>, not inside <view>.
+        # Tableau <view> content model: datasources?, datasource-dependencies*, aggregation
+        # Tableau <table> content model: view, style, panes, rows, cols
+        mark_class = self._get_tableau_mark_type(viz_spec.chart_type)
+
+        # ── COLOR field — add to datasource-dependencies ─────────────────────
         if viz_spec.color_field:
-            self._add_encoding(encodings, "color", viz_spec.color_field, datasource, "none")
-        
-        # Add size encoding
-        if viz_spec.size_field:
-            self._add_encoding(encodings, "size", viz_spec.size_field, datasource, viz_spec.aggregation_type)
+            color_resolved = resolve_field(str(viz_spec.color_field))
+            if color_resolved and color_resolved not in seen_deps:
+                seen_deps.add(color_resolved)
+                fspec = self._get_column_spec(color_resolved)
+                role = (fspec.recommended_role if fspec else None) or "dimension"
+                dtype = self._get_tableau_data_type(fspec.data_type) if fspec else "string"
+                dep_col = SubElement(ds_deps, "column")
+                dep_col.set("datatype", dtype)
+                dep_col.set("name", f"[{color_resolved}]")
+                dep_col.set("role", role)
+                dep_col.set("type", "nominal" if role == "dimension" else "quantitative")
+
+        # ─────────────────────────────────────────────────────────────────────
+        # CRITICAL: <rows> and <cols> are children of <table>, NOT <view>.
+        # Placing them inside <view> causes Tableau to ignore them entirely,
+        # which is why all sheets appeared empty despite correct mark types.
+        #
+        # IMPORTANT: Tableau's shelf parser only accepts ONE aggregated measure
+        # expression per shelf (e.g. "SUM([Sales])").  Joining two aggregations
+        # with a space — "AVG([F1]) AVG([F2])" — triggers a Qualified Name
+        # Parse Error.  Multiple dimension references ARE fine space-separated.
+        # Strategy: use the first measure found; all dimensions are kept.
+        # ─────────────────────────────────────────────────────────────────────
+
+        def _shelf_expr(fname: str) -> str:
+            """Build shelf expression: AGG([measure]) or [dimension]."""
+            fspec = self._get_column_spec(fname)
+            role = (fspec.recommended_role if fspec else None) or self._infer_role(
+                fspec.data_type if fspec else None
+            )
+            if role == "measure" and use_agg:
+                return f"{agg_func}([{fname}])"
+            return f"[{fname}]"
+
+        def _safe_shelf_fields(fields: list[str]) -> list[str]:
+            """
+            Return a list of fields safe to emit on a single shelf.
+            Dimensions can be freely mixed (space-sep is valid).
+            Keep only the FIRST measure to avoid multi-aggregation parse errors.
+            """
+            dims, measures = [], []
+            for f in fields:
+                fspec = self._get_column_spec(f)
+                role = (fspec.recommended_role if fspec else None) or self._infer_role(
+                    fspec.data_type if fspec else None
+                )
+                if role == "measure":
+                    measures.append(f)
+                else:
+                    dims.append(f)
+            # Keep all dimensions + at most one measure
+            return dims + (measures[:1] if use_agg else measures)
+
+        rows_fields = _safe_shelf_fields(all_y_fields)
+        cols_fields = _safe_shelf_fields(all_x_fields)
+
+        # ── <panes> inside <table>, AFTER <view> — correct Tableau schema order:
+        # <table> = view, style, panes, rows, cols
+        panes_elem = SubElement(table, "panes")
+        pane_elem = SubElement(panes_elem, "pane")
+        mark_elem = SubElement(pane_elem, "mark")
+        mark_elem.set("class", mark_class)
+
+        rows_elem = SubElement(table, "rows")
+        rows_elem.text = " ".join(_shelf_expr(f) for f in rows_fields)
+
+        cols_elem = SubElement(table, "cols")
+        cols_elem.text = " ".join(_shelf_expr(f) for f in cols_fields)
+
+        logger.info(f"  rows text: '{rows_elem.text}'")
+        logger.info(f"  cols text: '{cols_elem.text}'")
+
+
     
     def _add_encoding(self, parent: Element, shelf: str, field_name: str, datasource: Element, aggregation: str):
         """
@@ -1183,12 +1201,6 @@ class TableauWorkbookGenerator:
         --------
         _add_visualization_elements : Uses this method
         """
-        encoding = SubElement(parent, shelf)
-        column = SubElement(encoding, "column")
-        column.text = f"[{datasource.get('name')}].[{field_name}]"
-        
-        if aggregation and aggregation != "none":
-            column.set("aggregation", aggregation.title())
     
     def _get_tableau_mark_type(self, chart_type: VisualizationType) -> str:
         """
@@ -1368,34 +1380,76 @@ class TableauWorkbookGenerator:
         """
         dashboard = SubElement(parent, "dashboard")
         dashboard.set("name", dashboard_spec.name)
-        
-        # Add size
+
+        # ── Size ─────────────────────────────────────────────────────────────
         size = SubElement(dashboard, "size")
         size.set("maxheight", str(dashboard_spec.dimensions["height"]))
         size.set("maxwidth", str(dashboard_spec.dimensions["width"]))
-        
-        # Add view
-        view = SubElement(dashboard, "view")
-        
-        # Add zones for layout
-        zones = SubElement(view, "zones")
-        
-        # Create zones for each worksheet
-        for i, worksheet in enumerate(dashboard_spec.worksheets):
-            zone = SubElement(zones, "zone")
-            zone.set("id", str(i))
-            zone.set("type", "layout-basic")
-            
-            # Add zone properties
-            self._add_zone_properties(zone, worksheet, i, len(dashboard_spec.worksheets))
-        
-        # Add device layouts
-        devicelayouts = SubElement(view, "devicelayouts")
+
+        # ── Zones — direct child of <dashboard>, NOT wrapped in <view> ────────
+        # Correct structure:
+        #   <zones>
+        #     <zone type="layout-gridV" ...>           ← outer vertical container
+        #       <zone type="layout-gridH" ...>         ← one per row
+        #         <zone type="view" name="Sheet N"/>   ← worksheet reference
+        #       </zone>
+        #     </zone>
+        #   </zones>
+        zones = SubElement(dashboard, "zones")
+
+        worksheets = dashboard_spec.worksheets
+        total = len(worksheets)
+        dash_w = dashboard_spec.dimensions["width"]
+        dash_h = dashboard_spec.dimensions["height"]
+        cols = 2 if total > 1 else 1
+        rows_count = max(1, (total + cols - 1) // cols)
+        zone_w = dash_w // cols
+        zone_h = dash_h // rows_count
+
+        zone_id = 1  # IDs must be unique positive integers
+
+        # Outer vertical container (wraps all rows)
+        outer = SubElement(zones, "zone")
+        outer.set("h", str(dash_h))
+        outer.set("id", str(zone_id))
+        outer.set("type", "layout-gridV")
+        outer.set("w", str(dash_w))
+        outer.set("x", "0")
+        outer.set("y", "0")
+        zone_id += 1
+
+        for row in range(rows_count):
+            # Horizontal container for this row
+            row_zone = SubElement(outer, "zone")
+            row_zone.set("h", str(zone_h))
+            row_zone.set("id", str(zone_id))
+            row_zone.set("type", "layout-gridH")
+            row_zone.set("w", str(dash_w))
+            row_zone.set("x", "0")
+            row_zone.set("y", str(row * zone_h))
+            zone_id += 1
+
+            for col in range(cols):
+                idx = row * cols + col
+                if idx < total:
+                    ws = worksheets[idx]
+                    ws_zone = SubElement(row_zone, "zone")
+                    ws_zone.set("h", str(zone_h))
+                    ws_zone.set("id", str(zone_id))
+                    ws_zone.set("name", ws.name)         # worksheet name as attribute
+                    ws_zone.set("type", "view")           # "view" = worksheet zone
+                    ws_zone.set("w", str(zone_w))
+                    ws_zone.set("x", str(col * zone_w))
+                    ws_zone.set("y", str(row * zone_h))
+                    zone_id += 1
+
+        # ── Device layouts — direct child of <dashboard> ─────────────────────
+        devicelayouts = SubElement(dashboard, "devicelayouts")
         devicelayout = SubElement(devicelayouts, "devicelayout")
         devicelayout.set("auto-generated", "true")
         devicelayout.set("name", "Phone")
     
-    def _add_zone_properties(self, zone: Element, worksheet: WorksheetSpec, index: int, total: int):
+    def _add_zone_properties(self, zone: Element, worksheet: WorksheetSpec, index: int, total: int):  # kept for backward compat
         """
         Add position and dimension properties to a dashboard zone.
         
@@ -1558,30 +1612,58 @@ class TableauWorkbookGenerator:
         title_run = SubElement(title_text, "run")
         title_run.text = worksheet_spec.visualization.title
     
+    def _infer_role(self, data_type) -> str:
+        """Infer dimension/measure role from a DataType enum or raw string."""
+        try:
+            val = data_type.value if hasattr(data_type, "value") else str(data_type)
+        except Exception:
+            val = "string"
+        return "measure" if val in ("integer", "float") else "dimension"
+
+    def _get_column_spec(self, field_name: str):
+        """Return the DataColumn from the stored schema matching *field_name* (case-insensitive)."""
+        schema = getattr(self, "_dataset_schema", None)
+        if not schema:
+            return None
+        field_lower = str(field_name).lower().strip()
+        for col in schema.columns:
+            if col.name.lower().strip() == field_lower:
+                return col
+        return None
+
     def _create_windows_element(self, parent: Element, workbook_spec: TableauWorkbookSpec) -> None:
-        """Create windows element for Tableau Desktop compatibility"""
-        # Safely get first worksheet name
-        first_worksheet_name = "Sheet1"
-        if workbook_spec.dashboards and len(workbook_spec.dashboards) > 0:
-            dashboard = workbook_spec.dashboards[0]
-            if dashboard.worksheets and len(dashboard.worksheets) > 0:
-                first_worksheet_name = dashboard.worksheets[0].name
-        
-        window = SubElement(parent, "window")
-        window.set("class", "worksheet")
-        window.set("maximized", "true")
-        window.set("name", first_worksheet_name)
-        
-        # Add cards
+        """Create windows element for Tableau Desktop compatibility.
+
+        Opens on the first dashboard by default so users see the full dashboard
+        immediately rather than an individual empty worksheet.
+        """
+        # Prefer showing the dashboard window; fall back to first worksheet
+        dashboard_name: str | None = None
+        if workbook_spec.dashboards:
+            dashboard_name = workbook_spec.dashboards[0].name
+
+        if dashboard_name:
+            # Dashboard window
+            window = SubElement(parent, "window")
+            window.set("class", "dashboard")
+            window.set("maximized", "true")
+            window.set("name", dashboard_name)
+        else:
+            # Fallback: show first worksheet
+            first_ws = "Sheet 1"
+            if workbook_spec.dashboards and workbook_spec.dashboards[0].worksheets:
+                first_ws = workbook_spec.dashboards[0].worksheets[0].name
+            window = SubElement(parent, "window")
+            window.set("class", "worksheet")
+            window.set("maximized", "true")
+            window.set("name", first_ws)
+
+        # Data pane visible on the left
         cards = SubElement(window, "cards")
-        edge_name = SubElement(cards, "edge")
-        edge_name.set("name", "left")
-        
-        # Add strip
-        strip = SubElement(edge_name, "strip")
+        edge = SubElement(cards, "edge")
+        edge.set("name", "left")
+        strip = SubElement(edge, "strip")
         strip.set("size", "160")
-        
-        # Add card for data pane
         card = SubElement(strip, "card")
         card.set("type", "data")
     
@@ -1892,32 +1974,52 @@ class TableauWorkbookGenerator:
         filename = f"{workbook_spec.name}.twbx"
         file_path = self.output_directory / filename
         
+        logger.info(f"Creating TWBX file: {file_path}")
+        logger.debug(f"Dataset name for CSV: {request.dataset_schema.name}")
+        
         with zipfile.ZipFile(file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             # Add workbook XML
             zipf.writestr("workbook.twb", workbook_xml)
+            logger.debug("Added workbook.twb to package")
             
             # Add datasource
             zipf.writestr("Data/Datasources/datasource.tds", datasource_xml)
+            logger.debug("Added Data/Datasources/datasource.tds to package")
             
-            # Add sample data if requested - use actual data from CSV file if it exists
-            if request.include_sample_data:
-                # Try to find the actual data file from temp folder
-                import os
-                temp_folder = Path(__file__).parent.parent.parent / "data" / "temp"
-                csv_files = list(temp_folder.glob("*.csv")) if temp_folder.exists() else []
-                
-                if csv_files:
-                    # Use the first CSV file found
-                    actual_csv_path = csv_files[0]
+            # ALWAYS include sample data - workbooks need data to display content
+            # Try to find the actual data file from temp folder
+            data_embedded = False
+            
+            # First, try to find the actual data file from temp folder
+            temp_folder = Path(__file__).parent.parent.parent / "data" / "temp"
+            logger.debug(f"Looking for CSV files in: {temp_folder}")
+            csv_files = list(temp_folder.glob("*.csv")) if temp_folder.exists() else []
+            logger.debug(f"Found {len(csv_files)} CSV files: {[f.name for f in csv_files]}")
+            
+            if csv_files:
+                # Use the first CSV file found
+                actual_csv_path = csv_files[0]
+                try:
                     with open(actual_csv_path, 'r', encoding='utf-8') as f:
                         sample_data = f.read()
-                    zipf.writestr(f"Data/{request.dataset_schema.name}.csv", sample_data)
-                    logger.info(f"Embedded actual data from {actual_csv_path} ({len(sample_data)} bytes)")
-                else:
-                    # Fall back to generating synthetic sample data
-                    sample_data = self._generate_sample_csv(request.dataset_schema)
-                    zipf.writestr(f"Data/{request.dataset_schema.name}.csv", sample_data)
-                    logger.info(f"Generated synthetic sample data ({len(sample_data)} bytes)")
+                    csv_filename = f"Data/{request.dataset_schema.name}.csv"
+                    zipf.writestr(csv_filename, sample_data)
+                    logger.info(f"Embedded actual data from {actual_csv_path} ({len(sample_data)} bytes) as {csv_filename}")
+                    data_embedded = True
+                except Exception as e:
+                    logger.warning(f"Failed to embed CSV from {actual_csv_path}: {e}")
+            
+            # If no actual data found or embedding failed, generate sample data
+            if not data_embedded:
+                sample_data = self._generate_sample_csv(request.dataset_schema)
+                csv_filename = f"Data/{request.dataset_schema.name}.csv"
+                zipf.writestr(csv_filename, sample_data)
+                logger.info(f"Generated synthetic sample data ({len(sample_data)} bytes) as {csv_filename}")
+        
+        logger.info(f"TWBX file created successfully: {file_path}")
+        logger.debug(f"TWBX file size: {file_path.stat().st_size if file_path.exists() else 'N/A'} bytes")
+        
+        
         
         return file_path
     
